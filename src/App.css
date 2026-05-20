@@ -1,0 +1,464 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap');
+
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --gold: #e2c97e;
+  --gold-dim: #b89a4a;
+  --gold-glow: rgba(226, 201, 126, 0.18);
+  --bg: #141414;
+  --surface: #1c1c1c;
+  --surface2: #232323;
+  --surface3: #2a2a2a;
+  --border: #333;
+  --text: #f0ece0;
+  --text-muted: #888;
+  --text-dim: #555;
+  --red: #e05555;
+  --radius: 10px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  height: 100vh;
+
+}
+
+#root {
+  height: 100vh;
+  overflow:hidden;
+}
+
+/* ─── Layout ─────────────────────────────────────────── */
+
+.app-root {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+
+}
+
+/* ─── Sidebar ─────────────────────────────────────────── */
+
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo-mark {
+  font-size: 28px;
+  color: var(--gold);
+  line-height: 1;
+}
+
+.logo-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.1em;
+  color: var(--gold);
+  line-height: 1;
+}
+
+.logo-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.sidebar-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-section:last-child {
+  border-bottom: none;
+}
+
+.section-label {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.upload-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  min-height: 32px;
+}
+
+.progress-bar-wrap {
+  height: 15px;
+  background: var(--surface3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--gold);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.specs-box .spec-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.specs-box .spec-row:last-child {
+  border-bottom: none;
+}
+
+.specs-box .spec-row span:last-child {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ─── Buttons ─────────────────────────────────────────── */
+
+.btn-gold {
+  background: var(--gold) !important;
+  color: #1a1400 !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  gap: 6px;
+  border: none !important;
+  transition: background 0.2s, transform 0.1s !important;
+}
+
+.btn-gold:hover:not(:disabled) {
+  background: #f0d98a !important;
+}
+
+.btn-gold:active {
+  transform: scale(0.98) !important;
+}
+
+.btn-gold:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
+.btn-ghost-gold {
+  color: var(--gold) !important;
+  background: transparent !important;
+  border: 1px solid var(--gold-dim) !important;
+  font-size: 12px !important;
+  gap: 5px;
+}
+
+.btn-ghost-gold:hover {
+  background: var(--gold-glow) !important;
+}
+
+.btn-ghost-muted {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  font-size: 12px !important;
+  gap: 5px;
+}
+
+.btn-ghost-muted:hover:not(:disabled) {
+  background: var(--surface3) !important;
+  color: var(--text) !important;
+}
+
+.btn-ghost-muted:disabled {
+  opacity: 0.3 !important;
+  cursor: not-allowed !important;
+}
+
+.w-full { width: 100%; }
+.mt-2 { margin-top: 8px; }
+
+/* ─── Main area ─────────────────────────────────────────── */
+
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: auto;
+  padding: 24px 24px 40px;
+  gap: 12px;
+  background: var(--bg);
+}
+
+.canvas-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  align-self: flex-start;
+}
+
+.a4-wrapper {
+  filter: drop-shadow(0 8px 40px rgba(0,0,0,0.7));
+}
+
+.a4-sheet {
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.canvas-footer {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.tittle-bar {
+  -webkit-app-region: drag;
+}
+
+.windows-button {
+  -webkit-app-region: no-drag;
+}
+/* ─── Pin slots ─────────────────────────────────────────── */
+
+.pin-slot {
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  border: 2px dashed #ccc;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.pin-slot:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 0 3px rgba(226, 201, 126, 0.5);
+}
+
+.pin-slot.selected {
+  box-shadow: 0 0 0 3px var(--gold);
+  border-color: var(--gold);
+}
+
+.pin-slot.has-image {
+  border: none;
+}
+
+.pin-slot.drag-over {
+  box-shadow: 0 0 0 3px #7eb8e2;
+  transform: scale(1.06);
+}
+
+.pin-empty-label {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  color: #ccc;
+  pointer-events: none;
+}
+
+.pin-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(220, 80, 80, 0.9);
+  border: none;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 10;
+}
+
+.pin-slot:hover .pin-remove {
+  opacity: 1;
+}
+
+/* ─── Cropper ─────────────────────────────────────────── */
+
+.cropper-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.cropper-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 640px;
+  min-height: 640px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+}
+
+.cropper-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+
+.cropper-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.cropper-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+
+.cropper-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.zoom-slider {
+  flex: 1;
+}
+
+.zoom-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 36px;
+  text-align: right;
+}
+
+.cropper-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* ─── Print ─────────────────────────────────────────── */
+
+@media print {
+  body {
+    background: white !important;
+    overflow: visible !important;
+  }
+
+  .sidebar,
+  .canvas-label,
+  .canvas-footer {
+    display: none !important;
+  }
+
+  .main-area {
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .a4-wrapper {
+    filter: none !important;
+  }
+
+  .a4-sheet {
+    width: 210mm !important;
+    height: 297mm !important;
+    position: relative !important;
+    page-break-after: always;
+  }
+
+  .pin-slot {
+    transform: none !important;
+    box-shadow: none !important;
+    border: 1px dashed #ccc !important;
+  }
+
+  .pin-slot.has-image {
+    border: none !important;
+  }
+
+  .pin-remove,
+  .cropper-overlay {
+    display: none !important;
+  }
+}
+
+/* Shadcn slider override */
+[data-slot="slider-thumb"] {
+  background: var(--gold) !important;
+  border-color: var(--gold) !important;
+}
+
+[data-slot="slider-track"] {
+  background: var(--surface3) !important;
+}
+
+[data-slot="slider-range"] {
+  background: var(--gold-dim) !important;
+}
