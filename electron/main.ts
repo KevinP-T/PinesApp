@@ -39,6 +39,14 @@ function createWindow() {
     transparent: true,
     minHeight: 980,
     minWidth: 1600,
+    height: 980,
+    width: 1600,
+    center: true,
+    show: false
+  })
+
+  win.once('ready-to-show', () => {
+    win?.show()
   })
 
   // Test active push message to Renderer-process.
@@ -53,7 +61,7 @@ function createWindow() {
     win.loadFile(path.join(RENDERER_DIST, 'index.html'))
   }
 
-  win.webContents.openDevTools()
+  //win.webContents.openDevTools()
 }
 
 // Quit when all windows are closed, except on macOS. There, it's common
@@ -77,7 +85,9 @@ app.on('activate', () => {
 app.whenReady().then(() => {
   createWindow()
 
-  setTimeout(() => autoUpdater.checkForUpdatesAndNotify(), 3000)
+  if (app.isPackaged) {
+    setTimeout(() => autoUpdater.checkForUpdatesAndNotify(), 3000)
+  }
 })
 
 // ===== IPC =====
@@ -105,30 +115,30 @@ ipcMain.on('window:toggle-maximize', () => {
 
 })
 
+log.transports.file.level = 'info'
 autoUpdater.logger = log
-autoUpdater.logger.transports.file.level = 'info'
 
 //UPDATE
 // Eventos del updater
 autoUpdater.on('checking-for-update', () => {
-  win.webContents.send('update-status', 'Buscando actualizaciones...')
+  win?.webContents.send('update-status', 'Buscando actualizaciones...')
 })
 
 autoUpdater.on('update-available', (info) => {
-  win.webContents.send('update-status', `Nueva versión ${info.version} disponible, descargando...`)
+  win?.webContents.send('update-status', `Nueva versión ${info.version} disponible, descargando...`)
 })
 
 autoUpdater.on('update-not-available', () => {
-  win.webContents.send('update-status', 'La app está al día')
+  win?.webContents.send('update-status', 'La app está al día')
 })
 
 autoUpdater.on('update-downloaded', () => {
-  win.webContents.send('update-status', 'Actualización lista, reiniciando...')
+  win?.webContents.send('update-status', 'Actualización lista, reiniciando...')
   // Reinicia e instala automáticamente
   autoUpdater.quitAndInstall()
 })
 
 autoUpdater.on('error', (err) => {
-  win.webContents.send('update-status', `Error: ${err.message}`)
+  win?.webContents.send('update-status', `Error: ${err.message}`)
 })
 //--------------

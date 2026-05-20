@@ -21,7 +21,7 @@ export default defineConfig({
         : {},
     }),
   ],
-  // 👇 AGREGA ESTO PARA SHADCN 👇
+  
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
