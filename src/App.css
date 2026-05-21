@@ -462,3 +462,63 @@ body {
 [data-slot="slider-range"] {
   background: var(--gold-dim) !important;
 }
+
+.app-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.4rem;
+  letter-spacing: 0.14em;
+
+  background: linear-gradient(
+    to bottom,
+    #f5df9d 0%,
+    #e2c97e 35%,
+    #c9a95b 60%,
+    #8d6b2c 100%
+  );
+
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+
+  text-shadow:
+    0 0 8px rgba(226, 201, 126, 0.12),
+    0 0 18px rgba(226, 201, 126, 0.08);
+
+  user-select: none;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kev {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 0.9rem;
+  letter-spacing: 0.14em;
+
+  background: linear-gradient(
+    to bottom,
+    #f5df9d 0%,
+    #e2c97e 35%,
+    #c9a95b 60%,
+    #8d6b2c 100%
+  );
+
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+
+  text-shadow:
+    0 0 8px rgba(226, 201, 126, 0.12),
+    0 0 18px rgba(226, 201, 126, 0.08);
+
+  user-select: none;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

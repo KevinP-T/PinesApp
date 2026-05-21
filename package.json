@@ -1,7 +1,7 @@
 {
   "name": "pinesapp",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -63,7 +63,7 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "public/PinitIcon.ico"
+      "icon": "D:\\Laburo\\AutomatizacionPines\\electron-vite-project\\src\\assets\\PinitIcon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -74,6 +74,9 @@
     },
     "linux": {
       "target": "AppImage"
-    }
+    },
+    "extraResources": [
+      "assets/**/*"
+    ]
   }
 }
