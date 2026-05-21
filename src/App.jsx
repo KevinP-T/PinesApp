@@ -207,7 +207,7 @@ function PinSlot({ index, imageData, isSelected, menuOpen, onClick, onEdit, onRe
           right: -outerBleed,
           bottom: -outerBleed,
           borderRadius: '50%',
-          backgroundColor: '#FFFFFF',
+          backgroundColor: '#fbfafb',
           border: '1px solid #d4d4d4',
           zIndex: 0,
           pointerEvents: 'none' /* El mouse lo traspasa como un fantasma */
@@ -392,7 +392,7 @@ export default function App() {
           // --- 1. DIBUJAMOS EL CÍRCULO EXTERIOR GRIS (Base/Sangrado) ---
           ctx.beginPath()
           ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
-          ctx.fillStyle = '#FFFFFF' // Mismo fondo gris de la pantalla
+          ctx.fillStyle = '#fbfafb' // Mismo fondo gris de la pantalla
           ctx.fill()
 
           ctx.lineWidth = 2 // Grosor del borde ajustado para que se vea bien en 300 DPI
@@ -421,6 +421,27 @@ export default function App() {
   }
 
   const filledCount = pins.filter(Boolean).length
+
+  //UPDATES
+  const [updateState, setUpdateState] = useState(null)
+  // null | 'available' | 'downloading' | 'ready'
+  const [updateVersion, setUpdateVersion] = useState('')
+  const [updateProgress, setUpdateProgress] = useState(0)
+
+  useEffect(() => {
+    window.ipcRenderer.on('update-available', (_, version) => {
+      setUpdateVersion(version)
+      setUpdateState('available')
+    })
+    window.ipcRenderer.on('update-progress', (_, percent) => {
+      setUpdateState('downloading')
+      setUpdateProgress(percent)
+    })
+    window.ipcRenderer.on('update-downloaded', () => {
+      setUpdateState('ready')
+      setUpdateProgress(100)
+    })
+  }, [])
 
 
   return (
@@ -539,6 +560,87 @@ export default function App() {
             setSelectedSlot(null)
           }}
         />
+      )}
+
+
+      {updateState && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 999,
+        }}>
+          <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--gold)',
+            borderRadius: 14,
+            padding: '28px 32px',
+            minWidth: 360,
+            display: 'flex', flexDirection: 'column', gap: 16,
+          }}>
+            <div style={{ fontFamily: 'Bebas Neue', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.08em' }}>
+              {updateState === 'available' && '✨ Nueva versión disponible'}
+              {updateState === 'downloading' && '⬇️ Descargando actualización...'}
+              {updateState === 'ready' && '✅ Lista para instalar'}
+            </div>
+
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+              {updateState === 'available' && `Versión ${updateVersion} disponible. ¿Querés descargarla ahora?`}
+              {updateState === 'downloading' && 'Podés seguir usando la app mientras se descarga.'}
+              {updateState === 'ready' && 'La app se va a reiniciar para aplicar la actualización.'}
+            </div>
+
+            {(updateState === 'downloading' || updateState === 'ready') && (
+              <div>
+                <div style={{ height: 6, background: 'var(--surface3)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 3,
+                    background: 'var(--gold)',
+                    width: `${updateProgress}%`,
+                    transition: 'width 0.3s ease'
+                  }} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'right', marginTop: 4 }}>
+                  {updateProgress}%
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              {updateState === 'available' && (
+                <>
+                  <Button className="btn-ghost-muted" size="sm" onClick={() => setUpdateState(null)}>
+                    Ahora no
+                  </Button>
+                  <Button className="btn-gold" size="sm" onClick={() => {
+                    window.ipcRenderer.send('update:start-download')
+                    setUpdateState('downloading')
+                  }}>
+                    Descargar
+                  </Button>
+                </>
+              )}
+              {updateState === 'downloading' && (
+                <Button className="btn-ghost-muted" size="sm" disabled>
+                  Descargando...
+                </Button>
+              )}
+              {updateState === 'ready' && (
+                <>
+                  <Button className="btn-ghost-muted px-2! py-1!" size="sm" onClick={() => setUpdateState(null)}>
+                    Más tarde
+                  </Button>
+                  <Button className="btn-gold px-2! py-1!" size="sm" onClick={() => {
+                    window.ipcRenderer.send('update:install')
+                  }}>
+                    Reiniciar e instalar
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

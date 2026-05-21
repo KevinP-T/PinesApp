@@ -1,11 +1,12 @@
 {
   "name": "pinesapp",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "build": "tsc && vite build",
+    "dist": "npm run build && electron-builder --publish always",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "build:win": "electron-builder --win",
@@ -49,13 +50,24 @@
   "build": {
     "appId": "MarioPines_id",
     "productName": "MarioPines",
+    "files": [
+      "dist/**/*",
+      "!dist/win-unpacked/**/*",
+      "!dist/builder-effective-config.yaml",
+      "dist-electron/**/*"
+    ],
     "publish": {
       "provider": "github",
       "owner": "KevinP-T",
-      "repo": "tu-repo-github"
+      "repo": "PinesApp"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "public/PinitIcon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     },
     "mac": {
       "target": "dmg"

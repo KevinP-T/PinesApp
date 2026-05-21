@@ -1,12 +1,10 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import log from 'electron-log'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 
-const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -31,18 +29,20 @@ let win: BrowserWindow | null
 
 function createWindow() {
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    icon: path.join(process.env.VITE_PUBLIC, 'PinitIcon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
+      webSecurity: false,
+      allowRunningInsecureContent: true,
     },
     frame: false,
-    transparent: true,
     minHeight: 980,
     minWidth: 1600,
     height: 980,
     width: 1600,
     center: true,
-    show: false
+    show: true,  // mostrá directo
+    backgroundColor: '#141414',
   })
 
   win.once('ready-to-show', () => {
@@ -53,12 +53,12 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', (new Date).toLocaleString())
   })
-
+  console.log('RENDERER_DIST:', RENDERER_DIST)
+  console.log('__dirname:', __dirname)
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
   } else {
-    // win.loadFile('dist/index.html')
-    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
+    win.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
   //win.webContents.openDevTools()
@@ -86,7 +86,7 @@ app.whenReady().then(() => {
   createWindow()
 
   if (app.isPackaged) {
-    setTimeout(() => autoUpdater.checkForUpdatesAndNotify(), 3000)
+    setTimeout(() => autoUpdater.checkForUpdates(), 3000)
   }
 })
 
@@ -120,12 +120,13 @@ autoUpdater.logger = log
 
 //UPDATE
 // Eventos del updater
-autoUpdater.on('checking-for-update', () => {
-  win?.webContents.send('update-status', 'Buscando actualizaciones...')
-})
 
 autoUpdater.on('update-available', (info) => {
-  win?.webContents.send('update-status', `Nueva versión ${info.version} disponible, descargando...`)
+  win?.webContents.send('update-available', info.version)
+})
+
+autoUpdater.on('download-progress', (progress) => {
+  win?.webContents.send('update-progress', Math.round(progress.percent))
 })
 
 autoUpdater.on('update-not-available', () => {
@@ -133,8 +134,14 @@ autoUpdater.on('update-not-available', () => {
 })
 
 autoUpdater.on('update-downloaded', () => {
-  win?.webContents.send('update-status', 'Actualización lista, reiniciando...')
-  // Reinicia e instala automáticamente
+  win?.webContents.send('update-downloaded')
+})
+
+ipcMain.on('update:start-download', () => {
+  autoUpdater.downloadUpdate()
+})
+
+ipcMain.on('update:install', () => {
   autoUpdater.quitAndInstall()
 })
 
