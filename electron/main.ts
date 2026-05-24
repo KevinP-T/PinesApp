@@ -3,8 +3,10 @@ import { autoUpdater } from 'electron-updater'
 import log from 'electron-log'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs'
 
 
+const templatesPath = path.join(app.getPath('userData'), 'templates.json')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -149,3 +151,22 @@ autoUpdater.on('error', (err) => {
   win?.webContents.send('update-status', `Error: ${err.message}`)
 })
 //--------------
+
+
+ipcMain.handle('templates:list', () => {
+  try {
+    if (fs.existsSync(templatesPath)) {
+      return JSON.parse(fs.readFileSync(templatesPath, 'utf-8'))
+    }
+  } catch (_) {}
+  return []
+})
+
+ipcMain.handle('templates:save', (_, data) => {
+  try {
+    fs.writeFileSync(templatesPath, JSON.stringify(data), 'utf-8')
+    return true
+  } catch (_) {
+    return false
+  }
+})
