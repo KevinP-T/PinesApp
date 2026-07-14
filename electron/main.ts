@@ -4,6 +4,7 @@ import log from 'electron-log'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
+import { migrateTemplateV1toV2, loadTemplatesSafe, saveTemplatesSafe } from '../src/lib/migration.js'
 
 
 const templatesPath = path.join(app.getPath('userData'), 'templates.json')
@@ -88,6 +89,7 @@ app.whenReady().then(() => {
   createWindow()
 
   if (app.isPackaged) {
+    autoUpdater.autoDownload = false
     setTimeout(() => autoUpdater.checkForUpdates(), 3000)
   }
 })
@@ -123,6 +125,10 @@ autoUpdater.logger = log
 //UPDATE
 // Eventos del updater
 
+// El renderer avisa cuando el usuario aceptó la actualización para que el
+// instalado post-descarga no dependa de que el modal siga montado.
+let userAcceptedUpdate = false
+
 autoUpdater.on('update-available', (info) => {
   win?.webContents.send('update-available', info.version)
 })
@@ -136,7 +142,16 @@ autoUpdater.on('update-not-available', () => {
 })
 
 autoUpdater.on('update-downloaded', () => {
-  win?.webContents.send('update-downloaded')
+  // Si el usuario aceptó, instalamos de inmediato aunque el modal se haya cerrado.
+  if (userAcceptedUpdate) {
+    autoUpdater.quitAndInstall()
+  } else {
+    win?.webContents.send('update-downloaded')
+  }
+})
+
+ipcMain.on('update:user-accepted', () => {
+  userAcceptedUpdate = true
 })
 
 ipcMain.on('update:start-download', () => {
@@ -148,6 +163,7 @@ ipcMain.on('update:install', () => {
 })
 
 autoUpdater.on('error', (err) => {
+  log.error('Auto-update error:', err)
   win?.webContents.send('update-status', `Error: ${err.message}`)
 })
 //--------------
@@ -155,18 +171,27 @@ autoUpdater.on('error', (err) => {
 
 ipcMain.handle('templates:list', () => {
   try {
-    if (fs.existsSync(templatesPath)) {
-      return JSON.parse(fs.readFileSync(templatesPath, 'utf-8'))
-    }
-  } catch (_) {}
-  return []
+    const raw = fs.existsSync(templatesPath) ? fs.readFileSync(templatesPath, 'utf-8') : null
+    const bak = fs.existsSync(templatesPath + '.bak') ? fs.readFileSync(templatesPath + '.bak', 'utf-8') : null
+    const arr = loadTemplatesSafe(raw, () => bak)
+    return arr
+  } catch (e) {
+    log.warn('templates:list falló', e)
+    return []
+  }
 })
 
 ipcMain.handle('templates:save', (_, data) => {
   try {
-    fs.writeFileSync(templatesPath, JSON.stringify(data), 'utf-8')
+    if (fs.existsSync(templatesPath)) {
+      fs.copyFileSync(templatesPath, templatesPath + '.bak')
+    }
+    const tmp = templatesPath + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(data), 'utf-8')
+    fs.renameSync(tmp, templatesPath)
     return true
-  } catch (_) {
+  } catch (e) {
+    log.warn('templates:save falló', e)
     return false
   }
 })

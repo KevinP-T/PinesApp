@@ -1,43 +1,52 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "pinit_id",
   "asar": true,
-  "productName": "YourAppName",
+  "productName": "Pinit",
   "directories": {
-    "output": "release/${version}"
+    "output": "dist"
   },
   "files": [
-    "dist",
-    "dist-electron"
+    "dist/**/*",
+    "!dist/win-unpacked/**/*",
+    "!dist/builder-effective-config.yaml",
+    "dist-electron/**/*"
   ],
-  "mac": {
-    "target": [
-      "dmg"
-    ],
-    "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
+  "publish": {
+    "provider": "github",
+    "owner": "KevinP-T",
+    "repo": "PinesApp"
   },
   "win": {
     "target": [
-      {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
-      }
+      "nsis",
+      "appx"
     ],
-    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+    "icon": "src/assets/PinitIcon.ico"
   },
   "nsis": {
     "oneClick": false,
-    "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
+    "allowToChangeInstallationDirectory": true
+  },
+  "appx": {
+    "publisher": "CN=KevinPT",
+    "publisherDisplayName": "Kevin P-T",
+    "identityName": "Pinit",
+    "applicationId": "Pinit",
+    "displayName": "Pinit"
+  },
+  "mac": {
+    "target": [
+      "dmg"
+    ]
   },
   "linux": {
     "target": [
       "AppImage"
-    ],
-    "artifactName": "${productName}-Linux-${version}.${ext}"
-  }
+    ]
+  },
+  "extraResources": [
+    "assets/**/*"
+  ]
 }

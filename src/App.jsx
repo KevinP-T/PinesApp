@@ -1,654 +1,50 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
-import { Slider } from "@/components/ui/slider"
 import {
-  Upload, ZoomIn, ZoomOut, RotateCcw, Check,
-  Download, Trash2, Move, CircleDashed, Edit, TrashIcon, X, Square, Minus,
-  Lock, Unlock, Save, FolderOpen, Plus, ChevronDown, Clipboard, Link2, Unlink2,
-  Copy, ClipboardPaste
+  Download, Trash2, ZoomIn, ZoomOut, RotateCcw, Check,
+  Save, FolderOpen, ChevronDown, Minus, Square, X, HelpCircle,
+  RefreshCw, CheckCircle, AlertCircle
 } from "lucide-react"
 import './App.css'
 import PinitIcon from './assets/PinitIcon.ico'
 
-// ─── Exact measurements from Krita templates ──────────────────────────────
-const DPI = 300
-const MM_TO_PX = DPI / 25.4
-const A4_W_MM = 210
-const A4_H_MM = 297
-const A4_W_PX = 2480
-const A4_H_PX = 3508
+// ─── Modular components & helpers ──────────────────────────────────────────
+import {
+  DPI, MM_TO_PX, A4_W_MM, A4_H_MM, A4_W_PX, A4_H_PX,
+  A3_W_MM, A3_H_MM, SHEETS,
+  DEFAULT_PIN_DIAM_MM, DEFAULT_BLEED_MM, DEFAULT_COLS, DEFAULT_ROWS,
+  DEFAULT_GAP_X_MM, DEFAULT_GAP_Y_MM,
+  calcExportConstants, calcPinFractions, calcCapacity,
+  AR_DIAMETER_PRESETS, AR_BLEED_PRESETS
+} from "./lib/canvasHelpers"
 
-const DEFAULT_PIN_DIAM_MM = 59
-const DEFAULT_BLEED_MM = 4.3
+import LockableInput from "./components/LockableInput"
+import CeldsOverlay from "./components/CeldsOverlay"
+import PinSlot from "./components/PinSlot"
+import PinCropper from "./components/PinCropper"
 
-function calcExportConstants(pinDiamMm, bleedMm) {
-  const pinRadiusMm = pinDiamMm / 2
-  const pinRadiusPx300 = pinRadiusMm * MM_TO_PX
-  const bleedPx300 = bleedMm * MM_TO_PX
-  const exportRadiusPx = Math.round(pinRadiusPx300 + bleedPx300)
-  return { pinRadiusMm, pinRadiusPx300, bleedPx300, exportRadiusPx }
-}
+// ─── Data migration (V1 → V2) ───────────────────────────────────────────────
+import {
+  migratePinitV1toV2, sanitizeBlobs, repairArrays, isFutureVersion,
+  migrateTemplateV1toV2,
+} from './lib/migration'
+import { PinitV2 } from './lib/pinitSchema'
 
-const DEFAULT_COLS = 3
-const DEFAULT_ROWS = 4
-const DEFAULT_GAP_X_MM = 69.5
-const DEFAULT_GAP_Y_MM = 69.5
+// ─── Internal board state (consolidated slot model) ─────────────────────────
+import { usePinBoard } from './lib/usePinBoard'
 
-function calcPinFractions(cols, rows, gapXMm, gapYMm) {
-  const totalW = (cols - 1) * gapXMm
-  const totalH = (rows - 1) * gapYMm
-  const startX = (A4_W_MM - totalW) / 2
-  const startY = (A4_H_MM - totalH) / 2
-  const fracs = []
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      fracs.push([
-        (startX + c * gapXMm) / A4_W_MM,
-        (startY + r * gapYMm) / A4_H_MM,
-      ])
-    }
-  }
-  return fracs
-}
-
-// ─── Color helpers ─────────────────────────────────────────────────────────
-function sampleBorderSectors(ctx, cx, cy, innerR, ringDepth, sectors) {
-  const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height)
-  const data = imageData.data
-  const W = ctx.canvas.width
-  const result = []
-  for (let s = 0; s < sectors; s++) {
-    const angleStart = (s / sectors) * Math.PI * 2
-    const angleEnd = ((s + 1) / sectors) * Math.PI * 2
-    let rSum = 0, gSum = 0, bSum = 0, count = 0
-    for (let a = angleStart; a < angleEnd; a += (angleEnd - angleStart) / 8) {
-      for (let depth = 0; depth <= ringDepth; depth++) {
-        const r = innerR - depth
-        if (r < 0) continue
-        const x = Math.round(cx + Math.cos(a) * r)
-        const y = Math.round(cy + Math.sin(a) * r)
-        if (x < 0 || x >= W || y < 0 || y >= ctx.canvas.height) continue
-        const idx = (y * W + x) * 4
-        if (data[idx + 3] < 30) continue
-        rSum += data[idx]; gSum += data[idx + 1]; bSum += data[idx + 2]
-        count++
-      }
-    }
-    result.push(count > 0
-      ? { r: Math.round(rSum / count), g: Math.round(gSum / count), b: Math.round(bSum / count) }
-      : null
-    )
-  }
-  return result.map((c, i) => {
-    if (c) return c
-    for (let d = 1; d < sectors; d++) {
-      const left = result[(i - d + sectors) % sectors]
-      const right = result[(i + d) % sectors]
-      if (left) return left
-      if (right) return right
-    }
-    return { r: 240, g: 240, b: 240 }
-  })
-}
-
-function paintBleedRing(ctx, cx, cy, innerR, outerR, sectorColors) {
-  const sectors = sectorColors.length
-  const W = ctx.canvas.width
-  const H = ctx.canvas.height
-  const yMin = Math.max(0, Math.floor(cy - outerR - 1))
-  const yMax = Math.min(H - 1, Math.ceil(cy + outerR + 1))
-  const xMin = Math.max(0, Math.floor(cx - outerR - 1))
-  const xMax = Math.min(W - 1, Math.ceil(cx + outerR + 1))
-  const imageData = ctx.getImageData(xMin, yMin, xMax - xMin + 1, yMax - yMin + 1)
-  const data = imageData.data
-  const iW = xMax - xMin + 1
-  for (let py = yMin; py <= yMax; py++) {
-    for (let px = xMin; px <= xMax; px++) {
-      const dx = px - cx
-      const dy = py - cy
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist < innerR || dist > outerR) continue
-      const angle = (Math.atan2(dy, dx) + Math.PI * 2) % (Math.PI * 2)
-      const sectorF = (angle / (Math.PI * 2)) * sectors
-      const s0 = Math.floor(sectorF) % sectors
-      const s1 = (s0 + 1) % sectors
-      const t = sectorF - Math.floor(sectorF)
-      const c0 = sectorColors[s0]
-      const c1 = sectorColors[s1]
-      const r = Math.round(c0.r * (1 - t) + c1.r * t)
-      const g = Math.round(c0.g * (1 - t) + c1.g * t)
-      const b = Math.round(c0.b * (1 - t) + c1.b * t)
-      const fadeT = (dist - innerR) / (outerR - innerR)
-      const alpha = Math.round(255 * (1 - fadeT * 0.15))
-      const localX = px - xMin
-      const localY = py - yMin
-      const idx = (localY * iW + localX) * 4
-      data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = alpha
-    }
-  }
-  ctx.putImageData(imageData, xMin, yMin)
-}
-
-// ─── PinCropper ────────────────────────────────────────────────────────────
-function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, bleedMm, exportRadiusPx, innerRadiusPx }) {
-  const DISPLAY_INNER = 460
-  const DISPLAY_SCALE_CROPPER = DISPLAY_INNER / pinDiamMm
-  const DISPLAY_BLEED = Math.round(bleedMm * DISPLAY_SCALE_CROPPER)
-  const DISPLAY_SIZE = DISPLAY_INNER + DISPLAY_BLEED * 2
-  const EXPORT_SIZE = exportRadiusPx * 2
-
-  const canvasRef = useRef(null)
-  const [zoom, setZoom] = useState(1)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
-  const [dragging, setDragging] = useState(false)
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
-  const imgRef = useRef(null)
-  const [imgLoaded, setImgLoaded] = useState(false)
-
-  const [fillEnabled, setFillEnabled] = useState(false)
-  const [fillColor, setFillColor] = useState('#ffffff')
-  const [outpaintEnabled, setOutpaintEnabled] = useState(false)
-  // NEW: bleed color override
-  const [bleedColorEnabled, setBleedColorEnabled] = useState(false)
-  const [bleedColor, setBleedColor] = useState('#fbfafb')
-
-  useEffect(() => {
-    if (!imageSrc) return
-    const img = new Image()
-    img.onload = () => {
-      imgRef.current = img
-      const scale = Math.max(DISPLAY_INNER / img.width, DISPLAY_INNER / img.height)
-      setZoom(scale)
-      setOffset({ x: 0, y: 0 })
-      setImgLoaded(true)
-    }
-    img.src = imageSrc
-  }, [imageSrc])
-
-  useEffect(() => {
-    if (imgLoaded) draw()
-  }, [zoom, offset, imgLoaded, fillEnabled, fillColor, outpaintEnabled, bleedColorEnabled, bleedColor])
-
-  const draw = () => {
-    const canvas = canvasRef.current
-    if (!canvas || !imgRef.current) return
-    const ctx = canvas.getContext('2d')
-    const img = imgRef.current
-    const S = DISPLAY_SIZE
-    const cx = S / 2
-    const cy = S / 2
-    const innerR = DISPLAY_INNER / 2
-    const outerR = innerR + DISPLAY_BLEED
-
-    ctx.clearRect(0, 0, S, S)
-
-    // Bleed ring background
-    ctx.beginPath()
-    ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
-    ctx.fillStyle = bleedColorEnabled ? bleedColor : '#fbfafb'
-    ctx.fill()
-
-    if (fillEnabled) {
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
-      ctx.clip()
-      ctx.fillStyle = fillColor
-      ctx.fillRect(0, 0, S, S)
-      ctx.restore()
-    }
-
-    ctx.save()
-    ctx.beginPath()
-    ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
-    ctx.clip()
-    const w = img.width * zoom
-    const h = img.height * zoom
-    ctx.drawImage(img, cx - w / 2 + offset.x, cy - h / 2 + offset.y, w, h)
-    ctx.restore()
-
-    if (outpaintEnabled && DISPLAY_BLEED > 0) {
-      const ringDepth = Math.max(4, Math.round(innerR * 0.06))
-      const sectors = 128
-      const borderColors = sampleBorderSectors(ctx, cx, cy, innerR, ringDepth, sectors)
-      paintBleedRing(ctx, cx, cy, innerR - 5, outerR, borderColors)
-    }
-
-    // Gold border
-    ctx.beginPath()
-    ctx.arc(cx, cy, innerR, 0, Math.PI * 2)
-    ctx.strokeStyle = '#e2c97e'
-    ctx.lineWidth = 1.5
-    ctx.stroke()
-
-    // Outer bleed border
-    ctx.beginPath()
-    ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
-    ctx.strokeStyle = '#d4d4d4'
-    ctx.lineWidth = 1
-    ctx.stroke()
-  }
-
-  const onMouseDown = (e) => {
-    setDragging(true)
-    setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
-  }
-  const onMouseMove = (e) => {
-    if (!dragging) return
-    setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y })
-  }
-  const onMouseUp = () => setDragging(false)
-  const onWheel = (e) => {
-    e.preventDefault()
-    setZoom(z => Math.max(0.05, Math.min(10, z * (1 - e.deltaY * 0.001))))
-  }
-
-  const handleEyedropper = async (target) => {
-    if (!window.EyeDropper) return
-    try {
-      const result = await new window.EyeDropper().open()
-      if (target === 'fill') {
-        setFillColor(result.sRGBHex)
-        if (!fillEnabled) setFillEnabled(true)
-      } else {
-        setBleedColor(result.sRGBHex)
-        if (!bleedColorEnabled) setBleedColorEnabled(true)
-      }
-    } catch (_) { }
-  }
-
-  const handleConfirm = () => {
-    const outerR = exportRadiusPx
-    const innerR = innerRadiusPx
-    const exportScale = innerR / (DISPLAY_INNER / 2)
-    const img = imgRef.current
-
-    const pinSize = innerR * 2
-    const offPin = document.createElement('canvas')
-    offPin.width = pinSize; offPin.height = pinSize
-    const ctxPin = offPin.getContext('2d')
-    const pcx = pinSize / 2, pcy = pinSize / 2
-
-    ctxPin.save()
-    ctxPin.beginPath()
-    ctxPin.arc(pcx, pcy, innerR, 0, Math.PI * 2)
-    ctxPin.clip()
-    if (fillEnabled) {
-      ctxPin.fillStyle = fillColor
-      ctxPin.fillRect(0, 0, pinSize, pinSize)
-    }
-    const w = img.width * zoom * exportScale
-    const h = img.height * zoom * exportScale
-    ctxPin.drawImage(img, pcx - w / 2 + offset.x * exportScale, pcy - h / 2 + offset.y * exportScale, w, h)
-    ctxPin.restore()
-
-    const bleedSize = outerR * 2
-    const offBleed = document.createElement('canvas')
-    offBleed.width = bleedSize; offBleed.height = bleedSize
-    const ctxBleed = offBleed.getContext('2d')
-    const bcx = bleedSize / 2, bcy = bleedSize / 2
-
-    // Fill bleed background
-    ctxBleed.beginPath()
-    ctxBleed.arc(bcx, bcy, outerR, 0, Math.PI * 2)
-    ctxBleed.fillStyle = bleedColorEnabled ? bleedColor : '#fbfafb'
-    ctxBleed.fill()
-
-    if (outpaintEnabled) {
-      if (fillEnabled) {
-        ctxBleed.fillStyle = fillColor
-        ctxBleed.fillRect(0, 0, bleedSize, bleedSize)
-      }
-      ctxBleed.save()
-      ctxBleed.beginPath()
-      ctxBleed.arc(bcx, bcy, innerR, 0, Math.PI * 2)
-      ctxBleed.clip()
-      ctxBleed.drawImage(img, bcx - w / 2 + offset.x * exportScale, bcy - h / 2 + offset.y * exportScale, w, h)
-      ctxBleed.restore()
-      const ringDepth = Math.max(8, Math.round(innerR * 0.06))
-      const sectors = 256
-      const borderColors = sampleBorderSectors(ctxBleed, bcx, bcy, innerR, ringDepth, sectors)
-      paintBleedRing(ctxBleed, bcx, bcy, innerR, outerR, borderColors)
-    }
-
-    onConfirm({ pinUrl: offPin.toDataURL('image/png'), bleedUrl: offBleed.toDataURL('image/png') })
-  }
-
-  const handleReset = () => {
-    if (!imgRef.current) return
-    const scale = Math.max(DISPLAY_INNER / imgRef.current.width, DISPLAY_INNER / imgRef.current.height)
-    setZoom(scale)
-    setOffset({ x: 0, y: 0 })
-  }
-
-  const checkStyle = {
-    display: 'flex', alignItems: 'center', gap: 7,
-    fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none',
-  }
-  const colorRowStyle = { display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 21 }
-  const eyedropperBtnStyle = {
-    background: 'var(--surface3)', border: '1px solid var(--border)',
-    borderRadius: 5, padding: '3px 7px', cursor: 'pointer',
-    color: 'var(--text-muted)', fontSize: 15, lineHeight: 1,
-  }
-
-  return (
-    <div className="cropper-overlay z-10000">
-      <div className="cropper-panel flex flex-col justify-between">
-        <div className="cropper-header">
-          <CircleDashed size={18} />
-          <span>Recortar — ⌀{pinDiamMm}mm · anillo de sangría visible</span>
-        </div>
-
-        <div className="cropper-canvas-wrap">
-          <canvas
-            ref={canvasRef}
-            width={DISPLAY_SIZE}
-            height={DISPLAY_SIZE}
-            style={{ cursor: dragging ? 'grabbing' : 'grab', borderRadius: '50%', display: 'block' }}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
-            onWheel={onWheel}
-          />
-          <div className="cropper-hint">
-            <Move size={12} /> Arrastrá para mover · Scroll para zoom
-          </div>
-        </div>
-
-        <div className="cropper-controls">
-          <div className="zoom-row">
-            <ZoomOut size={16} />
-            <Slider min={5} max={2000} step={1}
-              value={[Math.round(zoom * 100)]}
-              onValueChange={([v]) => setZoom(v / 100)}
-              className="zoom-slider"
-            />
-            <ZoomIn size={16} />
-            <span className="zoom-label">{Math.round(zoom * 100)}%</span>
-          </div>
-
-          <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-
-            {/* ── GROUP: Sangría ─────────────────────────────── */}
-            <div style={{
-              border: '1px solid rgba(184,134,11,0.25)',
-              borderRadius: 8, overflow: 'hidden',
-            }}>
-              <div style={{
-                background: 'rgba(184,134,11,0.08)',
-                padding: '4px 10px',
-                fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                color: 'var(--gold)', textTransform: 'uppercase',
-                borderBottom: '1px solid rgba(184,134,11,0.15)',
-              }}>
-                Sangría
-              </div>
-              <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
-
-                {/* Bleed color */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                    border: bleedColorEnabled ? '2px solid var(--gold)' : '2px solid var(--border)',
-                    background: bleedColorEnabled ? 'var(--gold)' : 'var(--surface3)',
-                    transition: 'all 0.15s ease',
-                  }}>
-                    {bleedColorEnabled && <Check size={10} strokeWidth={3} color="#1a1a1a" />}
-                    <input type="checkbox" checked={bleedColorEnabled} onChange={e => setBleedColorEnabled(e.target.checked)} style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }} />
-                  </span>
-                  <span style={{ fontSize: 12, color: bleedColorEnabled ? 'var(--text)' : 'var(--text-muted)', transition: 'color 0.15s' }}>Color de sangría personalizado</span>
-                </label>
-                {bleedColorEnabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 24 }}>
-                    <div style={{ position: 'relative', width: 28, height: 28, borderRadius: 5, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
-                      <input type="color" value={bleedColor} onChange={e => setBleedColor(e.target.value)}
-                        style={{ position: 'absolute', inset: '-4px', width: 'calc(100% + 8px)', height: 'calc(100% + 8px)', border: 'none', cursor: 'pointer', padding: 0 }} />
-                    </div>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', letterSpacing: '0.05em' }}>{bleedColor}</span>
-                    {window.EyeDropper && <button onClick={() => handleEyedropper('bleed')} title="Cuentagotas sangría" style={eyedropperBtnStyle}>💧</button>}
-                  </div>
-                )}
-
-                {/* Outpaint */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                    border: outpaintEnabled ? '2px solid var(--gold)' : '2px solid var(--border)',
-                    background: outpaintEnabled ? 'var(--gold)' : 'var(--surface3)',
-                    transition: 'all 0.15s ease',
-                  }}>
-                    {outpaintEnabled && <Check size={10} strokeWidth={3} color="#1a1a1a" />}
-                    <input type="checkbox" checked={outpaintEnabled} onChange={e => setOutpaintEnabled(e.target.checked)} style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }} />
-                  </span>
-                  <span style={{ fontSize: 12, color: outpaintEnabled ? 'var(--text)' : 'var(--text-muted)', transition: 'color 0.15s' }}>Difusión de borde en sangría</span>
-                </label>
-                {outpaintEnabled && (
-                  <p style={{ fontSize: 10, color: 'var(--text-muted)', paddingLeft: 24, margin: 0, lineHeight: 1.4 }}>
-                    El anillo exterior adoptará los colores del borde{fillEnabled ? ' y del relleno' : ' de la imagen'}.
-                  </p>
-                )}
-
-              </div>
-            </div>
-
-            {/* ── GROUP: Imagen interna ──────────────────────── */}
-            <div style={{
-              border: '1px solid rgba(100,140,255,0.22)',
-              borderRadius: 8, overflow: 'hidden',
-            }}>
-              <div style={{
-                background: 'rgba(100,140,255,0.07)',
-                padding: '4px 10px',
-                fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                color: '#8aaeff', textTransform: 'uppercase',
-                borderBottom: '1px solid rgba(100,140,255,0.15)',
-              }}>
-                Imagen interna
-              </div>
-              <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
-
-                {/* Fill color */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                    border: fillEnabled ? '2px solid #8aaeff' : '2px solid var(--border)',
-                    background: fillEnabled ? '#8aaeff' : 'var(--surface3)',
-                    transition: 'all 0.15s ease',
-                  }}>
-                    {fillEnabled && <Check size={10} strokeWidth={3} color="#1a1a1a" />}
-                    <input type="checkbox" checked={fillEnabled} onChange={e => setFillEnabled(e.target.checked)} style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }} />
-                  </span>
-                  <span style={{ fontSize: 12, color: fillEnabled ? 'var(--text)' : 'var(--text-muted)', transition: 'color 0.15s' }}>Rellenar espacios vacíos</span>
-                </label>
-                {fillEnabled && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 24 }}>
-                    <div style={{ position: 'relative', width: 28, height: 28, borderRadius: 5, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
-                      <input type="color" value={fillColor} onChange={e => setFillColor(e.target.value)}
-                        style={{ position: 'absolute', inset: '-4px', width: 'calc(100% + 8px)', height: 'calc(100% + 8px)', border: 'none', cursor: 'pointer', padding: 0 }} />
-                    </div>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', letterSpacing: '0.05em' }}>{fillColor}</span>
-                    {window.EyeDropper && <button onClick={() => handleEyedropper('fill')} title="Cuentagotas" style={eyedropperBtnStyle}>💧</button>}
-                  </div>
-                )}
-
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        <div className="cropper-actions">
-          <Button variant="ghost" size="sm" onClick={handleReset} className="btn-ghost-gold px-4! py-2!">
-            <RotateCcw size={14} /> Resetear
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onCancel} className="btn-ghost-muted px-4! py-2!">
-            Cancelar
-          </Button>
-          <Button size="sm" onClick={handleConfirm} className="btn-gold px-4! py-2!">
-            <Check size={16} /> Confirmar
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── PinSlot ───────────────────────────────────────────────────────────────
-function PinSlot({ index, imageData, bleedUrl, isSelected, onClick, onEdit, onRemove, onUpload, onDrop, displayRadius, outerBleed, onCopy, onPaste, hasClipboard }) {
-  const [dragOver, setDragOver] = useState(false)
-  const size = displayRadius * 2
-  const bleedSize = size + outerBleed * 2
-
-  const onDragOver = (e) => { e.preventDefault(); setDragOver(true) }
-  const onDragLeave = () => setDragOver(false)
-  const onDrop_ = (e) => {
-    e.preventDefault(); setDragOver(false)
-    const idx = e.dataTransfer.getData('pin-index')
-    if (idx !== '') onDrop(parseInt(idx))
-  }
-
-  return (
-    <div style={{ position: 'relative', width: size, height: size }}>
-      {/* Bleed ring */}
-      <div style={{
-        position: 'absolute',
-        top: '50%', left: '50%',
-        transform: 'translate(-50%, -50%)',
-        width: bleedSize, height: bleedSize,
-        borderRadius: '50%',
-        backgroundColor: '#fbfafb',
-        border: '1px solid #d4d4d4',
-        zIndex: 0,
-        pointerEvents: 'none',
-        ...(bleedUrl && {
-          backgroundImage: `url(${bleedUrl})`,
-          backgroundSize: '100% 100%',
-          border: '1px solid #d4d4d4',  // FIX: keep border even with bleed image
-        }),
-      }} />
-
-      {/* Inner circle */}
-      <div
-        className={`pin-slot ${isSelected ? 'selected' : ''} ${dragOver ? 'drag-over' : ''} ${imageData ? 'has-image' : ''}`}
-        style={{ width: '100%', height: '100%', borderRadius: '50%', position: 'relative', zIndex: 1 }}
-        onClick={onClick}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop_}
-      >
-        {imageData ? (
-          <img
-            src={imageData}
-            alt={`Pin ${index + 1}`}
-            style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover', display: 'block' }}
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData('pin-index', index)}
-          />
-        ) : (
-          <div className="pin-empty-label">{index + 1}</div>
-        )}
-      </div>
-
-      {/* Floating toolbar */}
-      {isSelected && (
-        <ButtonGroup className="absolute z-100" style={{
-          bottom: '100%', left: '50%',
-          transform: 'translateX(-50%)',
-          marginBottom: '5px'
-        }}>
-          {imageData ? (
-            <>
-              <Button variant="secondary" size="lg" className="px-2! py-2!" onClick={onEdit}><Edit /> Editar</Button>
-              <Button variant="secondary" size="lg" className="px-2! py-2!" onClick={onCopy} title="Copiar pin"><Copy size={14} /></Button>
-              <Button variant="secondary" size="lg" className="px-3! py-2!" onClick={onRemove}><TrashIcon className="text-red-600" /></Button>
-            </>
-          ) : (
-            <>
-              <Button variant="secondary" size="lg" className="px-2! py-2!" onClick={onUpload}><Upload size={14} /> Cargar</Button>
-              {hasClipboard && (
-                <Button variant="secondary" size="lg" className="px-2! py-2!" onClick={onPaste} title="Pegar pin copiado">
-                  <ClipboardPaste size={14} />
-                </Button>
-              )}
-            </>
-          )}
-        </ButtonGroup>
-      )}
-    </div>
-  )
-}
-
-// ─── LockableInput ─────────────────────────────────────────────────────────
-function LockableInput({ label, value, inputValue, onChange, min, max, step, unit, linked, onLinkToggle, linkedLabel, frozen, onFreezeToggle }) {
-  const inputStyle = {
-    width: 60, background: frozen ? 'var(--surface)' : 'var(--surface3)', border: '1px solid var(--border)',
-    borderRadius: 5, color: frozen ? 'var(--text-muted)' : 'var(--text)', padding: '3px 6px',
-    fontSize: 13, textAlign: 'right', outline: 'none',
-    opacity: frozen ? 0.6 : 1,
-  }
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{label}</div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {onLinkToggle && (
-            <button onClick={onLinkToggle} title={linked ? `Desconectar de ${linkedLabel}` : `Vincular con ${linkedLabel}`}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: linked ? 'var(--gold)' : 'var(--text-muted)', padding: '0 2px' }}>
-              {linked ? <Link2 size={11} /> : <Unlink2 size={11} />}
-            </button>
-          )}
-          {onFreezeToggle && (
-            <button onClick={onFreezeToggle} title={frozen ? 'Desbloquear valor' : 'Bloquear valor (no editable)'}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: frozen ? 'var(--gold)' : 'var(--text-muted)', padding: '0 2px' }}>
-              {frozen ? <Lock size={11} /> : <Unlock size={11} />}
-            </button>
-          )}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <input type="number" min={min} max={max} step={step}
-          value={inputValue} onChange={e => onChange(e.target.value)}
-          disabled={frozen}
-          style={inputStyle} />
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{unit}</span>
-      </div>
-      <input type="range" min={min} max={max} step={step}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        disabled={frozen}
-        style={{ width: '100%', marginTop: 4, accentColor: 'var(--gold)', opacity: frozen ? 0.4 : 1 }} />
-    </div>
-  )
-}
-
-// ─── CeldsOverlay ──────────────────────────────────────────────────────────
-function CeldsOverlay({ positions, radius, w, h }) {
-  return (
-    <svg style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }} width={w} height={h}>
-      {positions.map((pos, i) => (
-        <g key={i}>
-          <circle cx={pos.x} cy={pos.y} r={radius} fill="none" stroke="#1e88e5" strokeWidth="1" strokeDasharray="4 3" opacity="0.75" />
-          <line x1={pos.x - 7} y1={pos.y} x2={pos.x + 7} y2={pos.y} stroke="#1e88e5" strokeWidth="0.8" opacity="0.75" />
-          <line x1={pos.x} y1={pos.y - 7} x2={pos.x} y2={pos.y + 7} stroke="#1e88e5" strokeWidth="0.8" opacity="0.75" />
-        </g>
-      ))}
-    </svg>
-  )
-}
-
-// ─── App ───────────────────────────────────────────────────────────────────
 export default function App() {
-  const [pins, setPins] = useState(Array(DEFAULT_COLS * DEFAULT_ROWS).fill(null))
-  const [originals, setOriginals] = useState(Array(DEFAULT_COLS * DEFAULT_ROWS).fill(null))
+  // Three parallel arrays (pins / originals / bleedImages) are managed inside the
+  // hook but exposed as plain arrays so the rest of the component — and the
+  // validated migration path — is unchanged.
+  const { pins, originals, bleedImages, setPin, setOriginal, setBleed, resize, removeSlot, copySlot, pasteSlot, swapSlots, hydrate, clearAll } = usePinBoard(DEFAULT_COLS * DEFAULT_ROWS)
+
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [cropTarget, setCropTarget] = useState(null)
   const [menuSlotIndex, setMenuSlotIndex] = useState(null)
+  const [showHelpModal, setShowHelpModal] = useState(false)
+  const [activeTemplateName, setActiveTemplateName] = useState(null)
   const fileInputRef = useRef(null)
   const pinitFileInputRef = useRef(null)
 
@@ -657,7 +53,11 @@ export default function App() {
   const [bleedMm, setBleedMm] = useState(DEFAULT_BLEED_MM)
   const [pinDiamInput, setPinDiamInput] = useState(String(DEFAULT_PIN_DIAM_MM))
   const [bleedInput, setBleedInput] = useState(String(DEFAULT_BLEED_MM))
-  const [bleedImages, setBleedImages] = useState(Array(DEFAULT_COLS * DEFAULT_ROWS).fill(null))
+
+  // ── Unit / sheet / bleed mode (V2 config fields) ───────────────────────
+  const [unit, setUnit] = useState('mm')
+  const [sheet, setSheet] = useState('A4')
+  const [bleedMode, setBleedMode] = useState('3mm')
 
   // ── Grid ──────────────────────────────────────────────────────────────
   const [gridCols, setGridCols] = useState(DEFAULT_COLS)
@@ -696,12 +96,12 @@ export default function App() {
     const loadTemplates = async () => {
       try {
         const saved = await window.ipcRenderer.invoke('templates:list')
-        if (saved) setTemplates(saved)
+        if (saved) setTemplates(saved.map(t => migrateTemplateV1toV2(t)).filter(t => t && t.pinDiamMm !== undefined))
       } catch (_) {
         // fallback: localStorage
         try {
           const raw = localStorage.getItem('pinit-templates')
-          if (raw) setTemplates(JSON.parse(raw))
+          if (raw) setTemplates(JSON.parse(raw).map(t => migrateTemplateV1toV2(t)).filter(t => t && t.pinDiamMm !== undefined))
         } catch (_) { }
       }
     }
@@ -745,8 +145,16 @@ export default function App() {
   const DISPLAY_SCALE = A4_DISPLAY_W / A4_W_MM
   const PIN_DISPLAY_RADIUS = Math.round((pinDiamMm / 2) * DISPLAY_SCALE)
 
-  const PIN_FRACTIONS = calcPinFractions(gridCols, gridRows, gapXMm, gapYMm)
+  const PIN_FRACTIONS = calcPinFractions(gridCols, gridRows, gapXMm, gapYMm, sheet)
   const TOTAL_PINS = gridCols * gridRows
+
+  // ── Display-only unit conversion (mm → inches) ──────────────────────────
+  // Internally everything stays in mm; only the *label* is converted.
+  const toDisplayMm = (vMm) =>
+    unit === 'in' ? (vMm / 25.4).toFixed(2) + '"' : vMm + ' mm'
+
+  // Live capacity counter for the chosen sheet.
+  const liveCapacity = calcCapacity(pinDiamMm, bleedMm, sheet)
   const { pinRadiusMm: PIN_RADIUS_MM, pinRadiusPx300: PIN_RADIUS_PX_300, exportRadiusPx: EXPORT_RADIUS_PX } = calcExportConstants(pinDiamMm, bleedMm)
 
   const pinDisplayPositions = PIN_FRACTIONS.map(([fx, fy]) => ({
@@ -758,15 +166,18 @@ export default function App() {
   const handlePinDiamChange = (val) => {
     if (pinDiamFrozen) return
     setPinDiamInput(val)
-    const n = parseFloat(val)
-    if (!isNaN(n) && n >= 10 && n <= 120) {
-      setPinDiamMm(n)
-      if (pinBleedLocked) {
-        // keep bleed ratio
-        const ratio = bleedMm / pinDiamMm
-        const newBleed = parseFloat((n * ratio).toFixed(2))
-        setBleedMm(newBleed)
-        setBleedInput(String(newBleed))
+    const parsed = parseFloat(val)
+    if (!isNaN(parsed)) {
+      const mm = unit === 'in' ? parsed * 25.4 : parsed
+      if (mm >= 10 && mm <= 120) {
+        setPinDiamMm(mm)
+        if (pinBleedLocked) {
+          // keep bleed ratio
+          const ratio = bleedMm / pinDiamMm
+          const newBleed = parseFloat((mm * ratio).toFixed(2))
+          setBleedMm(newBleed)
+          setBleedInput(unit === 'in' ? (newBleed / 25.4).toFixed(2) : String(newBleed))
+        }
       }
     }
   }
@@ -774,18 +185,88 @@ export default function App() {
   const handleBleedChange = (val) => {
     if (bleedFrozen) return
     setBleedInput(val)
-    const n = parseFloat(val)
-    if (!isNaN(n) && n >= 0 && n <= 20) setBleedMm(n)
+    const parsed = parseFloat(val)
+    if (!isNaN(parsed)) {
+      const mm = unit === 'in' ? parsed * 25.4 : parsed
+      if (mm >= 0 && mm <= 20) setBleedMm(mm)
+    }
   }
+
+  // ── AR diameter presets ──────────────────────────────────────────────
+  const applyDiameterPreset = (preset) => {
+    if (pinDiamFrozen) return
+    setPinDiamMm(preset.mm)
+    setPinDiamInput(unit === 'in' ? (preset.mm / 25.4).toFixed(2) : String(preset.mm))
+    // 'large' (56 mm) stays editable so the user can tweak 55/58 to match their machine.
+  }
+
+  // ── AR bleed quick toggle (3 mm / 6 mm) ──────────────────────────────
+  const applyBleedPreset = (mm) => {
+    if (bleedFrozen) return
+    setBleedMm(mm)
+    setBleedInput(unit === 'in' ? (mm / 25.4).toFixed(2) : String(mm))
+    // keep schema v2 bleedMode coherent when saving
+    const bm = Math.abs(mm - 3) < 1 ? '3mm' : Math.abs(mm - 6) < 1 ? '6mm' : '3mm'
+    setBleedMode(bm)
+  }
+
+  // ── Unit selector (with mathematical conversion) ──────────────────────
+  const handleSetUnit = (newUnit) => {
+    if (newUnit === unit) return
+    setUnit(newUnit)
+    if (newUnit === 'in') {
+      setPinDiamInput((pinDiamMm / 25.4).toFixed(2))
+      setBleedInput((bleedMm / 25.4).toFixed(2))
+      setGapXInput((gapXMm / 25.4).toFixed(2))
+      setGapYInput((gapYMm / 25.4).toFixed(2))
+    } else {
+      setPinDiamInput(String(parseFloat(pinDiamMm.toFixed(2))))
+      setBleedInput(String(parseFloat(bleedMm.toFixed(2))))
+      setGapXInput(String(parseFloat(gapXMm.toFixed(2))))
+      setGapYInput(String(parseFloat(gapYMm.toFixed(2))))
+    }
+  }
+
+  // ── Reset sidebar values back to factory defaults ───────────────────
+  const resetConfiguration = () => {
+    setPinDiamMm(DEFAULT_PIN_DIAM_MM)
+    setBleedMm(DEFAULT_BLEED_MM)
+    setGridCols(DEFAULT_COLS)
+    setGridRows(DEFAULT_ROWS)
+    setGapXMm(DEFAULT_GAP_X_MM)
+    setGapYMm(DEFAULT_GAP_Y_MM)
+
+    setUnit('mm')
+    setPinDiamInput(String(DEFAULT_PIN_DIAM_MM))
+    setBleedInput(String(DEFAULT_BLEED_MM))
+    setColsInput(String(DEFAULT_COLS))
+    setRowsInput(String(DEFAULT_ROWS))
+    setGapXInput(String(DEFAULT_GAP_X_MM))
+    setGapYInput(String(DEFAULT_GAP_Y_MM))
+
+    setSheet('A4')
+    setBleedMode('3mm')
+    setGapLocked(false)
+    setPinBleedLocked(false)
+    setPinDiamFrozen(false)
+    setBleedFrozen(false)
+    setGapXFrozen(false)
+    setGapYFrozen(false)
+    setA4Zoom(1.0)
+    setActiveTemplateName(null)
+
+    resize(DEFAULT_COLS * DEFAULT_ROWS)
+  }
+
+  // ── Sheet selector (A4 / A3) ─────────────────────────────────────────
+  const selectSheet = (s) => setSheet(s)
 
   const handleColsChange = (val) => {
     setColsInput(val)
     const n = parseInt(val)
     if (!isNaN(n) && n >= 1 && n <= 6) {
       setGridCols(n)
-      setPins(prev => Array(n * gridRows).fill(null).map((_, i) => prev[i] ?? null))
-      setOriginals(prev => Array(n * gridRows).fill(null).map((_, i) => prev[i] ?? null))
-      setBleedImages(prev => Array(n * gridRows).fill(null).map((_, i) => prev[i] ?? null))
+      resize(n * gridRows)
     }
   }
 
@@ -794,23 +275,24 @@ export default function App() {
     const n = parseInt(val)
     if (!isNaN(n) && n >= 1 && n <= 8) {
       setGridRows(n)
-      setPins(prev => Array(gridCols * n).fill(null).map((_, i) => prev[i] ?? null))
-      setOriginals(prev => Array(gridCols * n).fill(null).map((_, i) => prev[i] ?? null))
-      setBleedImages(prev => Array(gridCols * n).fill(null).map((_, i) => prev[i] ?? null))
+      resize(gridCols * n)
     }
   }
 
   const handleGapXChange = (val) => {
     if (gapXFrozen) return
     setGapXInput(val)
-    const n = parseFloat(val)
-    if (!isNaN(n) && n >= 10 && n <= 200) {
-      setGapXMm(n)
-      if (gapLocked) {
-        const ratio = gapYMm / gapXMm
-        const newY = parseFloat((n * ratio).toFixed(2))
-        setGapYMm(newY)
-        setGapYInput(String(newY))
+    const parsed = parseFloat(val)
+    if (!isNaN(parsed)) {
+      const mm = unit === 'in' ? parsed * 25.4 : parsed
+      if (mm >= 10 && mm <= 200) {
+        setGapXMm(mm)
+        if (gapLocked) {
+          const ratio = gapYMm / gapXMm
+          const newY = parseFloat((mm * ratio).toFixed(2))
+          setGapYMm(newY)
+          setGapYInput(unit === 'in' ? (newY / 25.4).toFixed(2) : String(newY))
+        }
       }
     }
   }
@@ -818,14 +300,17 @@ export default function App() {
   const handleGapYChange = (val) => {
     if (gapYFrozen) return
     setGapYInput(val)
-    const n = parseFloat(val)
-    if (!isNaN(n) && n >= 10 && n <= 200) {
-      setGapYMm(n)
-      if (gapLocked) {
-        const ratio = gapXMm / gapYMm
-        const newX = parseFloat((n * ratio).toFixed(2))
-        setGapXMm(newX)
-        setGapXInput(String(newX))
+    const parsed = parseFloat(val)
+    if (!isNaN(parsed)) {
+      const mm = unit === 'in' ? parsed * 25.4 : parsed
+      if (mm >= 10 && mm <= 200) {
+        setGapYMm(mm)
+        if (gapLocked) {
+          const ratio = gapXMm / gapYMm
+          const newX = parseFloat((mm * ratio).toFixed(2))
+          setGapXMm(newX)
+          setGapXInput(unit === 'in' ? (newX / 25.4).toFixed(2) : String(newX))
+        }
       }
     }
   }
@@ -852,45 +337,43 @@ export default function App() {
   }
 
   const handleRemoveSlot = (idx) => {
-    setPins(prev => { const n = [...prev]; n[idx] = null; return n })
-    setOriginals(prev => { const n = [...prev]; n[idx] = null; return n })
-    setBleedImages(prev => { const n = [...prev]; n[idx] = null; return n })
+    removeSlot(idx)
     if (selectedSlot === idx) setSelectedSlot(null)
   }
 
   const handleCopyPin = (idx) => {
     if (!pins[idx]) return
-    setPinClipboard({ pinUrl: pins[idx], bleedUrl: bleedImages[idx], original: originals[idx] })
+    setPinClipboard(copySlot(idx))
   }
 
   const handlePastePin = (idx) => {
     if (!pinClipboard) return
-    setPins(prev => { const n = [...prev]; n[idx] = pinClipboard.pinUrl; return n })
-    setBleedImages(prev => { const n = [...prev]; n[idx] = pinClipboard.bleedUrl; return n })
-    setOriginals(prev => { const n = [...prev]; n[idx] = pinClipboard.original; return n })
+    pasteSlot(idx, pinClipboard)
     setSelectedSlot(null)
   }
 
   const handleFileSelect = (e) => {
     const file = e.target.files[0]
     if (!file) return
-    const imageSrc = URL.createObjectURL(file)
-    setOriginals(prev => { const n = [...prev]; n[selectedSlot] = imageSrc; return n })
-    setCropTarget({ imageSrc, slotIndex: selectedSlot })
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      setOriginal(selectedSlot, dataUrl)
+      setCropTarget({ imageSrc: dataUrl, slotIndex: selectedSlot })
+    }
+    reader.readAsDataURL(file)
   }
 
   const handleCropConfirm = ({ pinUrl, bleedUrl }) => {
-    setPins(prev => { const n = [...prev]; n[cropTarget.slotIndex] = pinUrl; return n })
-    setBleedImages(prev => { const n = [...prev]; n[cropTarget.slotIndex] = bleedUrl; return n })
+    setPin(cropTarget.slotIndex, pinUrl)
+    setBleed(cropTarget.slotIndex, bleedUrl)
     setSelectedSlot(null)
     setCropTarget(null)
   }
 
   const handleSlotDrop = (targetIdx, sourceIdx) => {
     if (sourceIdx === targetIdx) return
-    setPins(prev => { const n = [...prev];[n[targetIdx], n[sourceIdx]] = [n[sourceIdx], n[targetIdx]]; return n })
-    setOriginals(prev => { const n = [...prev];[n[targetIdx], n[sourceIdx]] = [n[sourceIdx], n[targetIdx]]; return n })
-    setBleedImages(prev => { const n = [...prev];[n[targetIdx], n[sourceIdx]] = [n[sourceIdx], n[targetIdx]]; return n })
+    swapSlots(targetIdx, sourceIdx)
   }
 
   // ── Clipboard paste ────────────────────────────────────────────────────
@@ -898,7 +381,7 @@ export default function App() {
     const targetSlot = selectedSlot !== null ? selectedSlot : pins.findIndex(p => p === null)
     if (targetSlot === -1) return
     setSelectedSlot(targetSlot)
-    setOriginals(prev => { const n = [...prev]; n[targetSlot] = url; return n })
+    setOriginal(targetSlot, url)
     setCropTarget({ imageSrc: url, slotIndex: targetSlot })
   }, [pins, selectedSlot])
 
@@ -910,8 +393,12 @@ export default function App() {
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile()
-          const url = URL.createObjectURL(file)
-          handleImageFromClipboard(url)
+          const reader = new FileReader()
+          reader.onload = () => {
+            const dataUrl = reader.result
+            handleImageFromClipboard(dataUrl)
+          }
+          reader.readAsDataURL(file)
           break
         }
       }
@@ -932,7 +419,8 @@ export default function App() {
 
   // ── Config templates ───────────────────────────────────────────────────
   const currentConfig = () => ({
-    pinDiamMm, bleedMm, gridCols, gridRows, gapXMm, gapYMm
+    pinDiamMm, bleedMm, gridCols, gridRows, gapXMm, gapYMm,
+    unit, sheet, bleedMode,
   })
 
   const saveTemplate = async () => {
@@ -941,6 +429,7 @@ export default function App() {
     const updated = [...templates.filter(t => t.name !== name), tpl]
     setTemplates(updated)
     setTemplateName('')
+    setActiveTemplateName(name)
     try {
       await window.ipcRenderer.invoke('templates:save', updated)
     } catch (_) {
@@ -949,21 +438,35 @@ export default function App() {
   }
 
   const loadTemplate = (tpl) => {
-    setPinDiamMm(tpl.pinDiamMm); setPinDiamInput(String(tpl.pinDiamMm))
-    setBleedMm(tpl.bleedMm); setBleedInput(String(tpl.bleedMm))
-    setGridCols(tpl.gridCols); setColsInput(String(tpl.gridCols))
-    setGridRows(tpl.gridRows); setRowsInput(String(tpl.gridRows))
-    setGapXMm(tpl.gapXMm); setGapXInput(String(tpl.gapXMm))
-    setGapYMm(tpl.gapYMm); setGapYInput(String(tpl.gapYMm))
+    const t = migrateTemplateV1toV2(tpl)
+    const activeUnit = t.unit || 'mm'
+    setUnit(activeUnit)
+    setPinDiamMm(t.pinDiamMm)
+    setPinDiamInput(activeUnit === 'in' ? (t.pinDiamMm / 25.4).toFixed(2) : String(t.pinDiamMm))
+    setBleedMm(t.bleedMm)
+    setBleedInput(activeUnit === 'in' ? (t.bleedMm / 25.4).toFixed(2) : String(t.bleedMm))
+    setGridCols(t.gridCols); setColsInput(String(t.gridCols))
+    setGridRows(t.gridRows); setRowsInput(String(t.gridRows))
+    setGapXMm(t.gapXMm)
+    setGapXInput(activeUnit === 'in' ? (t.gapXMm / 25.4).toFixed(2) : String(t.gapXMm))
+    setGapYMm(t.gapYMm)
+    setGapYInput(activeUnit === 'in' ? (t.gapYMm / 25.4).toFixed(2) : String(t.gapYMm))
+    if (t.sheet) setSheet(t.sheet)
+    if (t.bleedMode) setBleedMode(t.bleedMode)
     // NOTE: images are preserved intentionally — only config changes
     setShowTemplateDD(false)
-    if (tpl.name) {
-      setTemplateToast(tpl.name)
+    if (t.name) {
+      setTemplateToast(t.name)
+      setActiveTemplateName(t.name)
       setTimeout(() => setTemplateToast(null), 2500)
     }
   }
 
   const deleteTemplate = async (name) => {
+    if (!confirm(`¿Estás seguro de que querés borrar la plantilla "${name}"?`)) return
+    if (activeTemplateName === name) {
+      setActiveTemplateName(null)
+    }
     const updated = templates.filter(t => t.name !== name)
     setTemplates(updated)
     try {
@@ -992,7 +495,14 @@ export default function App() {
           const pinImg = new Image()
           pinImg.onload = () => {
             const overlap = bleedDone ? 1 : 0
+            // ✅ Aplicar clip circular antes de dibujar
+            ctx.save()
+            ctx.beginPath()
+            ctx.arc(cx, cy, r + overlap, 0, Math.PI * 2)
+            ctx.clip()
             ctx.drawImage(pinImg, cx - r - overlap, cy - r - overlap, (r + overlap) * 2, (r + overlap) * 2)
+            ctx.restore()
+            // El borde va fuera del clip
             ctx.beginPath()
             ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
             ctx.strokeStyle = '#555555'; ctx.lineWidth = 1.5; ctx.stroke()
@@ -1004,7 +514,13 @@ export default function App() {
         if (bleedImages[idx]) {
           const bleedImg = new Image()
           bleedImg.onload = () => {
+            // ✅ Clip circular para el bleed también
+            ctx.save()
+            ctx.beginPath()
+            ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
+            ctx.clip()
             ctx.drawImage(bleedImg, cx - outerR, cy - outerR, outerR * 2, outerR * 2)
+            ctx.restore()
             drawPin(true)
           }
           bleedImg.src = bleedImages[idx]
@@ -1027,7 +543,7 @@ export default function App() {
   // ── Save .pinit ────────────────────────────────────────────────────────
   const handleSavePinit = () => {
     const pinitData = {
-      version: 1,
+      version: 2,
       config: currentConfig(),
       pins: pins,
       bleedImages: bleedImages,
@@ -1049,22 +565,55 @@ export default function App() {
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
-        const data = JSON.parse(ev.target.result)
-        // Apply config without touching images
-        if (data.config) {
-          const tpl = data.config
-          setPinDiamMm(tpl.pinDiamMm); setPinDiamInput(String(tpl.pinDiamMm))
-          setBleedMm(tpl.bleedMm); setBleedInput(String(tpl.bleedMm))
-          setGridCols(tpl.gridCols); setColsInput(String(tpl.gridCols))
-          setGridRows(tpl.gridRows); setRowsInput(String(tpl.gridRows))
-          setGapXMm(tpl.gapXMm); setGapXInput(String(tpl.gapXMm))
-          setGapYMm(tpl.gapYMm); setGapYInput(String(tpl.gapYMm))
+        let data = JSON.parse(ev.target.result)
+
+        // Versión futura: no tocar nada, preservar estado actual.
+        if (isFutureVersion(data)) {
+          setTemplateToast('Versión de Pinit más nueva; actualizá la app')
+          setTimeout(() => setTemplateToast(null), 3000)
+          return
         }
-        // Restore images from the .pinit file itself
-        if (data.pins) setPins(data.pins)
-        if (data.bleedImages) setBleedImages(data.bleedImages)
-        if (data.originals) setOriginals(data.originals)
-        setTemplateToast(file.name.replace(/\.pinit$/, ''))
+
+        // Migrar V1 → V2 si hace falta.
+        if ((data.version ?? 1) < 2) {
+          data = migratePinitV1toV2(data)
+        }
+
+        // Sanitizar blob: muertos → null en los 3 arrays.
+        data = sanitizeBlobs(data)
+
+        // Validar contra el esquema V2.
+        let res = PinitV2.safeParse(data)
+        if (!res.success) {
+          data = repairArrays(data)
+          res = PinitV2.safeParse(data)
+        }
+        if (!res.success) {
+          alert('No se pudo validar el archivo .pinit')
+          return
+        }
+
+        const cfg = res.data.config
+        const activeUnit = cfg.unit || 'mm'
+        setUnit(activeUnit)
+        setPinDiamMm(cfg.pinDiamMm)
+        setPinDiamInput(activeUnit === 'in' ? (cfg.pinDiamMm / 25.4).toFixed(2) : String(cfg.pinDiamMm))
+        setBleedMm(cfg.bleedMm)
+        setBleedInput(activeUnit === 'in' ? (cfg.bleedMm / 25.4).toFixed(2) : String(cfg.bleedMm))
+        setGridCols(cfg.gridCols); setColsInput(String(cfg.gridCols))
+        setGridRows(cfg.gridRows); setRowsInput(String(cfg.gridRows))
+        setGapXMm(cfg.gapXMm)
+        setGapXInput(activeUnit === 'in' ? (cfg.gapXMm / 25.4).toFixed(2) : String(cfg.gapXMm))
+        setGapYMm(cfg.gapYMm)
+        setGapYInput(activeUnit === 'in' ? (cfg.gapYMm / 25.4).toFixed(2) : String(cfg.gapYMm))
+        if (cfg.sheet) setSheet(cfg.sheet)
+        if (cfg.bleedMode) setBleedMode(cfg.bleedMode)
+
+        // Restaurar imágenes del propio archivo .pinit.
+        hydrate(res.data.pins, res.data.bleedImages, res.data.originals)
+        const name = file.name.replace(/\.pinit$/, '')
+        setTemplateToast(name)
+        setActiveTemplateName(name)
         setTimeout(() => setTemplateToast(null), 2500)
       } catch (_) {
         alert('No se pudo cargar el archivo .pinit')
@@ -1075,9 +624,10 @@ export default function App() {
   }
 
   // ── Updates ────────────────────────────────────────────────────────────
-  const [updateState, setUpdateState] = useState(null)  // null | 'available' | 'downloading'
+  const [updateState, setUpdateState] = useState(null)  // null | 'available' | 'downloading' | 'error'
   const [updateVersion, setUpdateVersion] = useState('')
   const [updateProgress, setUpdateProgress] = useState(0)
+  const [updateStatus, setUpdateStatus] = useState('')
   const updateUserAccepted = useRef(false)
 
   useEffect(() => {
@@ -1086,15 +636,37 @@ export default function App() {
       setUpdateState('available')
     })
     window.ipcRenderer.on('update-progress', (_, percent) => {
+      if (!updateUserAccepted.current) return
       setUpdateState('downloading')
       setUpdateProgress(percent)
     })
     window.ipcRenderer.on('update-downloaded', () => {
-      // El usuario ya aceptó descargar → instalar directo, sin preguntar de nuevo
       if (updateUserAccepted.current) {
         window.ipcRenderer.send('update:install')
+      } else {
+        setUpdateState(null)  // ← limpiar el modal si nadie pidió la descarga
       }
     })
+    // Mensajes de estado / errores visibles (incluye 'La app está al día' y 'Error: ...').
+    window.ipcRenderer.on('update-status', (_, msg) => {
+      if (!msg) return
+      if (msg.startsWith('Error:')) {
+        setUpdateStatus(msg)
+        setUpdateState('error')
+      } else if (msg === 'La app está al día') {
+        // No mostramos el modal si ya está al día.
+        setUpdateState(null)
+      } else {
+        // Otro estado informativo: mostrarlo si el modal está abierto.
+        setUpdateStatus(msg)
+      }
+    })
+    return () => {
+      window.ipcRenderer.removeAllListeners('update-available')
+      window.ipcRenderer.removeAllListeners('update-progress')
+      window.ipcRenderer.removeAllListeners('update-downloaded')
+      window.ipcRenderer.removeAllListeners('update-status')
+    }
   }, [])
 
   const filledCount = pins.filter(Boolean).length
@@ -1114,7 +686,7 @@ export default function App() {
       <input ref={pinitFileInputRef} type="file" accept=".pinit" style={{ display: 'none' }} onChange={handleLoadPinit} />
 
       {/* Header */}
-      <header className="tittle-bar flex justify-between items-center z-1 border-b-2 p-1">
+      <header className="tittle-bar flex justify-between items-center z-1">
         <div className="flex items-center gap-2">
           <img src={PinitIcon} className="h-10 w-10 object-contain pl-1!" alt="" />
           <span className="app-title">PINIT</span>
@@ -1131,17 +703,33 @@ export default function App() {
       <div className="flex w-screen flex-1 overflow-hidden">
 
         {/* ── Sidebar ── */}
-        <aside style={{
-          width: 188, minWidth: 188, background: 'var(--surface)',
-          borderRight: '1px solid var(--border)',
-          display: 'flex', flexDirection: 'column', gap: 0,
-          padding: '12px 12px', overflowY: 'auto',
-        }}>
+        <aside className="sidebar" style={{ padding: '12px 12px' }}>
           {sectionLabel('CONFIGURACIÓN')}
 
-          {/* Templates dropdown */}
-          <div style={{ marginBottom: 10 }} ref={templateDDRef}>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 4 }}>PLANTILLAS</div>
+          {/* Tarjeta 1: Plantillas */}
+          <div className="sidebar-card" ref={templateDDRef}>
+            <div className="sidebar-card-title flex justify-between items-center w-full">
+              <span>PLANTILLAS</span>
+              {activeTemplateName && (
+                <span style={{ 
+                  fontSize: '11px', 
+                  color: 'var(--gold)', 
+                  background: 'rgba(226, 201, 126, 0.1)', 
+                  border: '1px solid rgba(226, 201, 126, 0.2)',
+                  padding: '3px 8px', 
+                  borderRadius: '5px',
+                  textTransform: 'none',
+                  letterSpacing: '0',
+                  fontWeight: '500',
+                  maxWidth: '140px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }} title={`Plantilla activa: ${activeTemplateName}`}>
+                  {activeTemplateName}
+                </span>
+              )}
+            </div>
             <div style={{ position: 'relative' }}>
               <button
                 onClick={() => setShowTemplateDD(v => !v)}
@@ -1183,7 +771,7 @@ export default function App() {
               )}
             </div>
             {/* Save template */}
-            <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+            <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
               <input
                 value={templateName}
                 onChange={e => setTemplateName(e.target.value)}
@@ -1196,91 +784,261 @@ export default function App() {
                 <Save size={12} />
               </button>
             </div>
+            {/* Clear Template / Reset Sidebar button */}
+            <button
+              onClick={resetConfiguration}
+              title="Limpiar plantilla actual y restablecer valores de la sidebar a los de fábrica"
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                background: 'var(--surface3)',
+                border: '1px solid var(--border)',
+                borderRadius: 5,
+                color: 'var(--text-muted)',
+                padding: '5px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                marginTop: 2,
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+            >
+              <RotateCcw size={12} />
+              <span>Limpiar / Restablecer</span>
+            </button>
           </div>
 
-          {sectionDivider}
+          {/* Tarjeta 2: Configuración de Lienzo */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">AJUSTES DE LIENZO</div>
+            
+            {/* Unidad de medida */}
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 4 }}>UNIDAD DE MEDIDA</div>
+              <div style={{ display: 'flex', background: 'var(--surface3)', padding: 2, borderRadius: 5, border: '1px solid var(--border)' }}>
+                <button
+                  onClick={() => handleSetUnit('mm')}
+                  style={{
+                    flex: 1,
+                    background: unit === 'mm' ? 'var(--gold)' : 'transparent',
+                    color: unit === 'mm' ? '#1a1a1a' : 'var(--text-muted)',
+                    border: 'none',
+                    borderRadius: 4,
+                    padding: '4px 0',
+                    fontSize: 11,
+                    fontWeight: unit === 'mm' ? '600' : '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  mm
+                </button>
+                <button
+                  onClick={() => handleSetUnit('in')}
+                  style={{
+                    flex: 1,
+                    background: unit === 'in' ? 'var(--gold)' : 'transparent',
+                    color: unit === 'in' ? '#1a1a1a' : 'var(--text-muted)',
+                    border: 'none',
+                    borderRadius: 4,
+                    padding: '4px 0',
+                    fontSize: 11,
+                    fontWeight: unit === 'in' ? '600' : '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  in
+                </button>
+              </div>
+            </div>
 
-          {/* Pin diameter */}
-          <LockableInput
-            label="TAMAÑO DEL PIN"
-            value={pinDiamMm} inputValue={pinDiamInput}
-            onChange={handlePinDiamChange}
-            min={10} max={120} step={0.5} unit="mm"
-            linked={pinBleedLocked} onLinkToggle={() => setPinBleedLocked(v => !v)}
-            linkedLabel="sangría"
-            frozen={pinDiamFrozen} onFreezeToggle={() => setPinDiamFrozen(v => !v)}
-          />
+            {/* Tamaño de hoja */}
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 4 }}>TAMAÑO DE HOJA</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['A4', 'A3'].map(s => {
+                  const active = s === sheet
+                  return (
+                    <button key={s} onClick={() => selectSheet(s)}
+                      style={{
+                        flex: 1,
+                        background: active ? 'var(--gold)' : 'var(--surface3)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 5,
+                        color: active ? '#1a1a1a' : 'var(--text)',
+                        padding: '5px 8px',
+                        fontSize: 12,
+                        fontWeight: active ? '600' : '500',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {s}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
-          {/* Bleed */}
-          <LockableInput
-            label="SANGRÍA (BORDE EXTRA)"
-            value={bleedMm} inputValue={bleedInput}
-            onChange={handleBleedChange}
-            min={0} max={20} step={0.1} unit="mm"
-            frozen={bleedFrozen} onFreezeToggle={() => setBleedFrozen(v => !v)}
-          />
+            {/* Capacidad Badge */}
+            <div className="capacity-badge">
+              Caben <b style={{ color: 'var(--gold)' }}>{liveCapacity.total}</b> pines ({liveCapacity.cols}×{liveCapacity.rows}) en {sheet}
+            </div>
+          </div>
 
-          {sectionDivider}
+          {/* Tarjeta 3: Dimensiones del Pin */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">MEDIDAS DEL PIN</div>
+            
+            {/* Pin diameter */}
+            <LockableInput
+              label="TAMAÑO DEL PIN"
+              value={unit === 'in' ? pinDiamMm / 25.4 : pinDiamMm}
+              inputValue={pinDiamInput}
+              onChange={handlePinDiamChange}
+              min={unit === 'in' ? 10 / 25.4 : 10}
+              max={unit === 'in' ? 120 / 25.4 : 120}
+              step={unit === 'in' ? 0.05 : 0.5}
+              unit={unit === 'in' ? 'in' : 'mm'}
+              linked={pinBleedLocked} onLinkToggle={() => setPinBleedLocked(v => !v)}
+              linkedLabel="sangría"
+              frozen={pinDiamFrozen} onFreezeToggle={() => setPinDiamFrozen(v => !v)}
+            />
 
-          {/* Cols */}
-          <LockableInput
-            label="COLUMNAS"
-            value={gridCols} inputValue={colsInput}
-            onChange={handleColsChange}
-            min={1} max={6} step={1} unit="cols"
-          />
+            {/* AR diameter presets */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: -4 }}>
+              {AR_DIAMETER_PRESETS.map(preset => {
+                const commonlyUsed = [25, 32, 44, 58].includes(preset.mm)
+                const active = Math.abs(preset.mm - pinDiamMm) < 0.001
+                return (
+                  <button key={preset.mm}
+                    onClick={() => applyDiameterPreset(preset)}
+                    disabled={pinDiamFrozen}
+                    title={preset.label}
+                    style={{
+                      background: active ? 'var(--gold)' : 'var(--surface3)',
+                      border: '1px solid var(--border)', borderRadius: 5,
+                      color: active ? '#1a1a1a' : 'var(--text)',
+                      padding: '3px 6px', fontSize: 10, cursor: 'pointer',
+                      opacity: pinDiamFrozen ? 0.5 : 1,
+                    }}>
+                    {preset.label.replace(/ \(editable[^)]*\)/, '')}{commonlyUsed ? ' ★' : ''}
+                  </button>
+                )
+              })}
+            </div>
 
-          {/* Rows */}
-          <LockableInput
-            label="FILAS"
-            value={gridRows} inputValue={rowsInput}
-            onChange={handleRowsChange}
-            min={1} max={8} step={1} unit="filas"
-          />
+            {/* Bleed */}
+            <LockableInput
+              label="SANGRÍA (BORDE EXTRA)"
+              value={unit === 'in' ? bleedMm / 25.4 : bleedMm}
+              inputValue={bleedInput}
+              onChange={handleBleedChange}
+              min={0}
+              max={unit === 'in' ? 20 / 25.4 : 20}
+              step={unit === 'in' ? 0.01 : 0.1}
+              unit={unit === 'in' ? 'in' : 'mm'}
+              frozen={bleedFrozen} onFreezeToggle={() => setBleedFrozen(v => !v)}
+            />
 
-          {sectionDivider}
+            {/* AR bleed quick toggle (3 mm / 6 mm) */}
+            <div style={{ display: 'flex', gap: 4, marginTop: -4 }}>
+              {AR_BLEED_PRESETS.map(preset => {
+                const active = Math.abs(preset.mm - bleedMm) < 0.001
+                return (
+                  <button key={preset.mm}
+                    onClick={() => applyBleedPreset(preset.mm)}
+                    disabled={bleedFrozen}
+                    title={preset.label}
+                    style={{
+                      flex: 1, background: active ? 'var(--gold)' : 'var(--surface3)',
+                      border: '1px solid var(--border)', borderRadius: 5,
+                      color: active ? '#1a1a1a' : 'var(--text)',
+                      padding: '4px 6px', fontSize: 11, cursor: 'pointer',
+                      opacity: bleedFrozen ? 0.5 : 1,
+                    }}>
+                    {preset.mm} mm
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
-          {/* Gap X */}
-          <LockableInput
-            label="SEPARACIÓN HORIZONTAL"
-            value={gapXMm} inputValue={gapXInput}
-            onChange={handleGapXChange}
-            min={10} max={200} step={0.5} unit="mm"
-            linked={gapLocked} onLinkToggle={() => setGapLocked(v => !v)}
-            linkedLabel="vertical"
-            frozen={gapXFrozen} onFreezeToggle={() => setGapXFrozen(v => !v)}
-          />
+          {/* Tarjeta 4: Distribución en Grilla */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">DISTRIBUCIÓN Y GRILLA</div>
+            
+            {/* Cols */}
+            <LockableInput
+              label="COLUMNAS"
+              value={gridCols} inputValue={colsInput}
+              onChange={handleColsChange}
+              min={1} max={6} step={1} unit="cols"
+            />
 
-          {/* Gap Y */}
-          <LockableInput
-            label="SEPARACIÓN VERTICAL"
-            value={gapYMm} inputValue={gapYInput}
-            onChange={handleGapYChange}
-            min={10} max={200} step={0.5} unit="mm"
-            frozen={gapYFrozen} onFreezeToggle={() => setGapYFrozen(v => !v)}
-          />
+            {/* Rows */}
+            <LockableInput
+              label="FILAS"
+              value={gridRows} inputValue={rowsInput}
+              onChange={handleRowsChange}
+              min={1} max={8} step={1} unit="filas"
+            />
 
-          {sectionDivider}
+            {/* Gap X */}
+            <LockableInput
+              label="SEPARACIÓN HORIZONTAL"
+              value={unit === 'in' ? gapXMm / 25.4 : gapXMm}
+              inputValue={gapXInput}
+              onChange={handleGapXChange}
+              min={unit === 'in' ? 10 / 25.4 : 10}
+              max={unit === 'in' ? 200 / 25.4 : 200}
+              step={unit === 'in' ? 0.05 : 0.5}
+              unit={unit === 'in' ? 'in' : 'mm'}
+              linked={gapLocked} onLinkToggle={() => setGapLocked(v => !v)}
+              linkedLabel="vertical"
+              frozen={gapXFrozen} onFreezeToggle={() => setGapXFrozen(v => !v)}
+            />
 
+            {/* Gap Y */}
+            <LockableInput
+              label="SEPARACIÓN VERTICAL"
+              value={unit === 'in' ? gapYMm / 25.4 : gapYMm}
+              inputValue={gapYInput}
+              onChange={handleGapYChange}
+              min={unit === 'in' ? 10 / 25.4 : 10}
+              max={unit === 'in' ? 200 / 25.4 : 200}
+              step={unit === 'in' ? 0.05 : 0.5}
+              unit={unit === 'in' ? 'in' : 'mm'}
+              frozen={gapYFrozen} onFreezeToggle={() => setGapYFrozen(v => !v)}
+            />
+          </div>
 
-          {/* Bottom-right actions */}
-          <div className="flex flex-col gap-2 w-full">
-            <Button className="btn-gold w-full" onClick={handleExportPNG} disabled={filledCount === 0}>
-              <Download size={15} /> Exportar PNG
-            </Button>
-            <Button variant="ghost" className="btn-ghost-muted w-full" onClick={handleSavePinit} disabled={filledCount === 0}>
-              <Save size={14} /> Guardar .pinit
-            </Button>
-            <Button variant="ghost" className="btn-ghost-muted w-full"
-              onClick={() => pinitFileInputRef.current.click()}>
-              <FolderOpen size={14} /> Cargar plantilla .pinit
-            </Button>
-            <Button variant="ghost" className="btn-ghost-muted w-full"
-              onClick={() => { if (confirm('¿Limpiar todos los slots?')) { setPins(Array(TOTAL_PINS).fill(null)); setOriginals(Array(TOTAL_PINS).fill(null)); setBleedImages(Array(TOTAL_PINS).fill(null)) } }}
-              disabled={filledCount === 0}
-            >
-              <Trash2 size={14} /> Limpiar todo
-            </Button>
+          {/* Tarjeta 5: Acciones de Exportación */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">ACCIONES</div>
+            <div className="flex flex-col gap-2 w-full">
+              <Button className="btn-gold w-full" onClick={handleExportPNG} disabled={filledCount === 0}>
+                <Download size={15} /> Exportar PNG
+              </Button>
+              <Button variant="ghost" className="btn-ghost-muted w-full" onClick={handleSavePinit} disabled={filledCount === 0}>
+                <Save size={14} /> Guardar .pinit
+              </Button>
+              <Button variant="ghost" className="btn-ghost-muted w-full"
+                onClick={() => pinitFileInputRef.current.click()}>
+                <FolderOpen size={14} /> Cargar plantilla .pinit
+              </Button>
+              <Button variant="ghost" className="btn-ghost-muted w-full"
+                onClick={() => { if (confirm('¿Limpiar todos los slots?')) { clearAll(TOTAL_PINS) } }}
+                disabled={filledCount === 0}
+              >
+                <Trash2 size={14} /> Limpiar todo
+              </Button>
+            </div>
           </div>
         </aside>
 
@@ -1289,39 +1047,46 @@ export default function App() {
           <main className="main-area flex-1 flex flex-col overflow-hidden" style={{ padding: 0 }}>
 
             {/* Top bar: progress + zoom controls */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              padding: '8px 16px', borderBottom: '1px solid var(--border)',
-              flexShrink: 0,
-            }}>
-              <div style={{ minWidth: 180 }}>
-                <div className="section-label" style={{ marginBottom: 4 }}>PROGRESO</div>
-                <div className="progress-bar-wrap">
+            <div className="canvas-top-bar">
+              {/* Progreso */}
+              <div className="top-bar-progress">
+                <div className="progress-header">
+                  <span className="progress-title">Progreso</span>
+                  <span className="progress-text">{filledCount} / {TOTAL_PINS} pines</span>
+                </div>
+                <div className="progress-bar-wrap" style={{ height: 6 }}>
                   <div className="progress-bar" style={{ width: `${(filledCount / TOTAL_PINS) * 100}%` }} />
                 </div>
-                <div className="progress-label">{filledCount} / {TOTAL_PINS} pines</div>
               </div>
 
-              <p className="upload-hint" style={{ flex: 1, margin: 0 }}>
-                {selectedSlot !== null
-                  ? `→ Slot ${selectedSlot + 1} seleccionado · Ctrl+V para pegar`
-                  : 'Click en un slot para seleccionarlo'}
-              </p>
+              {/* Indicación de Slot Seleccionado */}
+              <div className="top-bar-hint">
+                <div className={`hint-badge ${selectedSlot !== null ? 'selected' : ''}`}>
+                  {selectedSlot !== null ? (
+                    <>
+                      <span style={{ color: 'var(--gold)' }}>●</span>
+                      <span>Slot {selectedSlot + 1} seleccionado · Ctrl+V para pegar</span>
+                    </>
+                  ) : (
+                    <span>Click en un slot para seleccionarlo · Doble click para editar/cargar</span>
+                  )}
+                </div>
+              </div>
 
-              {/* A4 Zoom controls */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>ZOOM - usar CTRL + Wheel</span>
-                <button onClick={() => setA4Zoom(z => Math.max(0.3, z - 0.1))}
-                  style={{ background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', color: 'var(--text)' }}>
+              {/* Controles de Zoom */}
+              <div className="top-bar-zoom">
+                <div className="zoom-hint-tag">
+                  <span>Zoom</span>
+                  <span style={{ color: 'var(--text-muted)' }}>(Ctrl + rueda)</span>
+                </div>
+                <button className="zoom-btn" onClick={() => setA4Zoom(z => Math.max(0.3, z - 0.1))} title="Zoom Out">
                   <ZoomOut size={13} />
                 </button>
-                <span style={{ fontSize: 12, color: 'var(--text)', minWidth: 36, textAlign: 'center' }}>{Math.round(a4Zoom * 100)}%</span>
-                <button onClick={() => setA4Zoom(z => Math.min(3, z + 0.1))}
-                  style={{ background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', color: 'var(--text)' }}>
+                <span className="zoom-value">{Math.round(a4Zoom * 100)}%</span>
+                <button className="zoom-btn" onClick={() => setA4Zoom(z => Math.min(3, z + 0.1))} title="Zoom In">
                   <ZoomIn size={13} />
                 </button>
-                <button onClick={() => setA4Zoom(1.0)} title="Restablecer zoom"
-                  style={{ background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 6px', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                <button className="zoom-btn" onClick={() => setA4Zoom(1.0)} title="Restablecer zoom">
                   <RotateCcw size={13} />
                 </button>
               </div>
@@ -1334,10 +1099,83 @@ export default function App() {
                 flex: 1, overflow: 'auto', display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
                 padding: 20, minHeight: 0,
+                position: 'relative',
               }}
               className="min-w-[80vw]"
               onClick={(e) => { if (e.target === e.currentTarget) setSelectedSlot(null) }}
             >
+              {/* Floating Specifications Panel */}
+              <div 
+                className="specs-panel"
+                style={{
+                  position: 'absolute',
+                  top: 16,
+                  right: 16,
+                  zIndex: 40,
+                  background: 'rgba(28, 28, 28, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 14px',
+                  width: 170,
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 4, textTransform: 'uppercase' }}>ESPECIFICACIONES</div>
+                  <div className="specs-box" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: 10 }}>
+                      <span>Hoja</span>
+                      <span style={{ color: 'var(--text)', fontWeight: 500 }}>{sheet} {SHEETS[sheet].w}×{SHEETS[sheet].h}mm</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: 10 }}>
+                      <span>Resolución</span>
+                      <span style={{ color: 'var(--text)', fontWeight: 500 }}>300 DPI</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: 10 }}>
+                      <span>Output</span>
+                      <span style={{ color: 'var(--text)', fontWeight: 500 }}>{sheet === 'A3' ? '3508×4961px' : '2480×3508px'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Help button nested here with pointer-events auto */}
+                <button 
+                  onClick={() => setShowHelpModal(true)}
+                  style={{
+                    pointerEvents: 'auto',
+                    width: '100%',
+                    background: 'var(--surface3)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text)',
+                    padding: '5px 8px',
+                    fontSize: 10,
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 5,
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'var(--gold)';
+                    e.currentTarget.style.color = '#1a1a1a';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'var(--surface3)';
+                    e.currentTarget.style.color = 'var(--text)';
+                  }}
+                >
+                  <HelpCircle size={12} />
+                  <span>Guía y Accesos</span>
+                </button>
+              </div>
               <div
                 className="a4-sheet z-0"
                 style={{ width: A4_DISPLAY_W, height: A4_DISPLAY_H, position: 'relative', flexShrink: 0, margin: 'auto' }}
@@ -1407,47 +1245,148 @@ export default function App() {
           innerRadiusPx={Math.round(PIN_RADIUS_PX_300)}
         />
       )}
-      <div className="w-[10vw] absolute top-10 left-50">
-        <div className="section-label">ESPECIFICACIONES</div>
-        <div className="spec-row"><span>Hoja</span><span>A4 {A4_W_MM}×{A4_H_MM}mm</span></div>
-        <div className="spec-row"><span>Resolución</span><span>300 DPI</span></div>
-        <div className="spec-row"><span>Output</span><span>2480×3508px</span></div>
-      </div>
-
-
-      {updateState && (
+      {/* Help Modal */}
+      {showHelpModal && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
-          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,
-          // Bloquear interacción con la app durante la descarga
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
           pointerEvents: 'all',
         }}>
           <div style={{
             background: 'var(--surface)', border: '1px solid var(--gold)', borderRadius: 14,
-            padding: '28px 32px', minWidth: 360, display: 'flex', flexDirection: 'column', gap: 16,
+            padding: '24px 28px', maxWidth: 500, width: '90%', display: 'flex', flexDirection: 'column', gap: 18,
+            boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
           }}>
-            <div style={{ fontFamily: 'Bebas Neue', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.08em' }}>
-              {updateState === 'available' && '✨ Nueva versión disponible'}
-              {updateState === 'downloading' && '⬇️ Descargando actualización...'}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontFamily: 'Bebas Neue', fontSize: 24, color: 'var(--gold)', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <HelpCircle size={20} />
+                <span>GUÍA DE USO Y SHORTCUTS</span>
+              </div>
+              <button 
+                onClick={() => setShowHelpModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
+                onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+              >
+                <X size={18} />
+              </button>
             </div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-              {updateState === 'available' && `Versión ${updateVersion} disponible. ¿Querés descargarla e instalarla ahora?`}
-              {updateState === 'downloading' && 'La app se va a reiniciar automáticamente cuando termine.'}
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', maxHeight: '60vh', paddingRight: 4 }}>
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                PINIT automatiza el armado de hojas para pines. A continuación, las interacciones más útiles disponibles:
+              </div>
+              
+              <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 12, marginBottom: 4 }}>🖱️ INTERACCIONES DE TABLERO</div>
+                <ul style={{ listStyleType: 'disc', paddingLeft: 16, fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <li><b>Click en slot</b>: Selecciona el slot para copiar, pegar o eliminar.</li>
+                  <li><b>Doble click en slot con imagen</b>: Abre el editor de recorte circular (Cropper).</li>
+                  <li><b>Doble click en slot vacío</b>: Abre el explorador de archivos para cargar una imagen.</li>
+                  <li><b>Arrastrar y Soltar (Drag & Drop)</b>: Intercambia de lugar los pines en el tablero.</li>
+                  <li><b>Click derecho</b>: Selecciona el slot y despliega la barra flotante de opciones (Copiar, Pegar, Eliminar, Cargar).</li>
+                </ul>
+              </div>
+
+              <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 12, marginBottom: 4 }}>⌨️ SHORTCUTS / ACCESOS RÁPIDOS</div>
+                <ul style={{ listStyleType: 'disc', paddingLeft: 16, fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <li><b>Ctrl + V (Pegar)</b>: Pega una imagen directamente desde tu portapapeles en el slot seleccionado (o en el primero vacío).</li>
+                  <li><b>Ctrl + Rueda del mouse</b>: Realiza zoom dinámico y suave en la hoja A4/A3.</li>
+                  <li><b>Ctrl + R</b>: Recarga la aplicación por completo.</li>
+                </ul>
+              </div>
+
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--text)', fontSize: 12, marginBottom: 4 }}>📌 CONSEJO DE SANGRE (BLEED)</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                  Usa <b>3 mm</b> para stickers o resinas normales, y <b>6 mm</b> para pines de metal/plástico envueltos (button) para garantizar que la imagen envuelva el contorno del pin sin bordes blancos.
+                </div>
+              </div>
             </div>
+
+            <Button className="btn-gold w-full mt-2" size="sm" onClick={() => setShowHelpModal(false)}>
+              Entendido
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {updateState && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Actualización de la aplicación"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,
+            // Bloquear interacción con la app durante la descarga
+            pointerEvents: 'all',
+          }}
+        >
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--gold)', borderRadius: 14,
+            padding: '28px 32px', minWidth: 380, maxWidth: 440, display: 'flex', flexDirection: 'column', gap: 16,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+          }}>
+            {/* Encabezado con icono según estado */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: updateState === 'error' ? 'rgba(239,68,68,0.15)' : 'rgba(212,175,55,0.15)',
+                color: updateState === 'error' ? '#ef4444' : 'var(--gold)',
+              }}>
+                {updateState === 'available' && <Download size={22} />}
+                {updateState === 'downloading' && <RefreshCw size={22} />}
+                {updateState === 'error' && <AlertCircle size={22} />}
+              </div>
+              <div style={{ fontFamily: 'Bebas Neue', fontSize: 22, color: 'var(--gold)', letterSpacing: '0.08em' }}>
+                {updateState === 'available' && 'NUEVA VERSIÓN DISPONIBLE'}
+                {updateState === 'downloading' && 'DESCARGANDO ACTUALIZACIÓN'}
+                {updateState === 'error' && 'ERROR DE ACTUALIZACIÓN'}
+              </div>
+            </div>
+
+            {/* Cuerpo */}
+            <div style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.45 }}>
+              {updateState === 'available' && (
+                <>
+                  Hay una versión más reciente lista para instalar.
+                  <div style={{
+                    marginTop: 10, padding: '8px 12px', borderRadius: 8,
+                    background: 'var(--surface3)', border: '1px solid var(--border)',
+                    color: 'var(--text)', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8,
+                  }}>
+                    <CheckCircle size={16} color="var(--gold)" />
+                    <span>Versión <b style={{ color: 'var(--gold)' }}>{updateVersion}</b> disponible</span>
+                  </div>
+                </>
+              )}
+              {updateState === 'downloading' && 'La app se va a reiniciar automáticamente cuando termine la descarga.'}
+              {updateState === 'error' && (
+                <span style={{ color: '#fca5a5' }}>{updateStatus || 'Ocurrió un error al buscar o descargar la actualización.'}</span>
+              )}
+            </div>
+
+            {/* Barra de progreso (solo en descarga) */}
             {updateState === 'downloading' && (
               <div>
-                <div style={{ height: 6, background: 'var(--surface3)', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', borderRadius: 3, background: 'var(--gold)', width: `${updateProgress}%`, transition: 'width 0.3s ease' }} />
+                <div style={{ height: 8, background: 'var(--surface3)', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                  <div style={{ height: '100%', borderRadius: 4, background: 'var(--gold)', width: `${updateProgress}%`, transition: 'width 0.3s ease' }} />
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'right', marginTop: 4 }}>{updateProgress}%</div>
+                <div style={{ fontSize: 12, color: 'var(--gold)', textAlign: 'right', marginTop: 6, fontWeight: 600 }}>{updateProgress}%</div>
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+
+            {/* Acciones */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
               {updateState === 'available' && (
                 <>
                   <Button className="btn-ghost-muted px-2! py-3!" size="sm" onClick={() => setUpdateState(null)}>Ahora no</Button>
-                  <Button className="btn-gold px-2! py-3!" size="sm" onClick={() => {
+                  <Button autoFocus className="btn-gold px-2! py-3!" size="sm" onClick={() => {
                     updateUserAccepted.current = true
+                    window.ipcRenderer.send('update:user-accepted')
                     window.ipcRenderer.send('update:start-download')
                     setUpdateState('downloading')
                   }}>Descargar e instalar</Button>
@@ -1455,6 +1394,9 @@ export default function App() {
               )}
               {updateState === 'downloading' && (
                 <Button className="btn-ghost-muted" size="sm" disabled>Descargando... {updateProgress}%</Button>
+              )}
+              {updateState === 'error' && (
+                <Button className="btn-gold px-2! py-3!" size="sm" onClick={() => setUpdateState(null)}>Cerrar</Button>
               )}
             </div>
           </div>
