@@ -669,6 +669,21 @@ export default function App() {
     }
   }, [])
 
+  // ── Modals Keyboard Shortcuts (Escape key) ──────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showHelpModal) {
+          setShowHelpModal(false)
+        } else if (updateState && updateState !== 'downloading') {
+          setUpdateState(null)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showHelpModal, updateState])
+
   const filledCount = pins.filter(Boolean).length
 
   const inputStyle = {
@@ -1247,11 +1262,16 @@ export default function App() {
       )}
       {/* Help Modal */}
       {showHelpModal && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
-          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
-          pointerEvents: 'all',
-        }}>
+        <div 
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowHelpModal(false)
+          }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+            backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+            pointerEvents: 'all',
+          }}
+        >
           <div style={{
             background: 'var(--surface)', border: '1px solid var(--gold)', borderRadius: 14,
             padding: '24px 28px', maxWidth: 500, width: '90%', display: 'flex', flexDirection: 'column', gap: 18,
@@ -1317,6 +1337,11 @@ export default function App() {
           role="dialog"
           aria-modal="true"
           aria-label="Actualización de la aplicación"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && updateState !== 'downloading') {
+              setUpdateState(null)
+            }
+          }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
             backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,

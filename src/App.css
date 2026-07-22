@@ -323,6 +323,8 @@ body {
 
 /* ─── Cropper ─────────────────────────────────────────── */
 
+/* ─── Cropper ─────────────────────────────────────────── */
+
 .cropper-overlay {
   position: fixed;
   inset: 0;
@@ -331,30 +333,34 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: 10000;
+  padding: 16px;
+  overflow-y: auto;
 }
 
 .cropper-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 24px;
+  padding: 20px 24px;
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 640px;
-  min-height: 640px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+  flex-direction: row;
+  gap: 24px;
+  width: auto;
+  max-width: 860px;
+  max-height: min(640px, calc(100vh - 32px));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+  align-items: stretch;
 }
 
-.cropper-header {
+/* Left Column: Preview & Zoom */
+.cropper-left {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  font-family: 'Bebas Neue', sans-serif;
-  font-size: 18px;
-  letter-spacing: 0.08em;
-  color: var(--gold);
+  justify-content: center;
+  gap: 12px;
+  flex-shrink: 0;
 }
 
 .cropper-canvas-wrap {
@@ -364,6 +370,16 @@ body {
   gap: 8px;
 }
 
+.cropper-canvas {
+  max-width: min(380px, 42vh);
+  max-height: min(380px, 42vh);
+  width: auto;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
 .cropper-hint {
   display: flex;
   align-items: center;
@@ -371,12 +387,6 @@ body {
   font-size: 10px;
   color: var(--text-dim);
   letter-spacing: 0.06em;
-}
-
-.cropper-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .zoom-row {
@@ -397,11 +407,55 @@ body {
   text-align: right;
 }
 
+/* Right Column: Info, Options & Actions */
+.cropper-right {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 310px;
+  max-width: 400px;
+  overflow: hidden;
+}
+
+.cropper-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+
+.cropper-controls-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+  max-height: calc(100vh - 220px);
+}
+
+.cropper-controls-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.cropper-controls-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cropper-controls-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
 .cropper-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
   align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 /* ─── Print ─────────────────────────────────────────── */

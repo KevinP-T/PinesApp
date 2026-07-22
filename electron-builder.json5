@@ -20,21 +20,13 @@
   },
   "win": {
     "target": [
-      "nsis",
-      "appx"
+      "nsis"
     ],
     "icon": "src/assets/PinitIcon.ico"
   },
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true
-  },
-  "appx": {
-    "publisher": "CN=KevinPT",
-    "publisherDisplayName": "Kevin P-T",
-    "identityName": "Pinit",
-    "applicationId": "Pinit",
-    "displayName": "Pinit"
   },
   "mac": {
     "target": [

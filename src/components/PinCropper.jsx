@@ -94,6 +94,7 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [initialOffset, setInitialOffset] = useState({ x: 0, y: 0 })
   const imgRef = useRef(null)
   const [imgLoaded, setImgLoaded] = useState(false)
 
@@ -119,6 +120,16 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
   useEffect(() => {
     if (imgLoaded) draw()
   }, [zoom, offset, imgLoaded, fillEnabled, fillColor, outpaintEnabled, bleedColorEnabled, bleedColor])
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel])
 
   const draw = () => {
     const canvas = canvasRef.current
@@ -174,15 +185,6 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
     ctx.lineWidth = 1.5
     ctx.stroke()
 
-    // Safe zone (3.5mm inside the visible border)
-    ctx.beginPath()
-    ctx.arc(cx, cy, safeR, 0, Math.PI * 2)
-    ctx.strokeStyle = 'rgba(226,201,126,0.55)'
-    ctx.lineWidth = 1
-    ctx.setLineDash([4, 4])
-    ctx.stroke()
-    ctx.setLineDash([])
-
     // Outer bleed border
     ctx.beginPath()
     ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
@@ -193,11 +195,16 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
 
   const onMouseDown = (e) => {
     setDragging(true)
-    setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
+    setDragStart({ x: e.clientX, y: e.clientY })
+    setInitialOffset({ x: offset.x, y: offset.y })
   }
   const onMouseMove = (e) => {
-    if (!dragging) return
-    setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y })
+    if (!dragging || !canvasRef.current) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    const scaleFactor = rect.width ? (DISPLAY_SIZE / rect.width) : 1
+    const dx = (e.clientX - dragStart.x) * scaleFactor
+    const dy = (e.clientY - dragStart.y) * scaleFactor
+    setOffset({ x: initialOffset.x + dx, y: initialOffset.y + dy })
   }
   const onMouseUp = () => setDragging(false)
   const onWheel = (e) => {
@@ -293,36 +300,37 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
     color: 'var(--text-muted)', fontSize: 15, lineHeight: 1,
   }
 
+  const handleOverlayClick = (e) => {
+    if (e.target === e.currentTarget) {
+      onCancel()
+    }
+  }
+
   return (
-    <div className="cropper-overlay z-10000">
-      <div className="cropper-panel flex flex-col justify-between">
-        <div className="cropper-header">
-          <CircleDashed size={18} />
-          <span>Recortar — ⌀{pinDiamMm}mm · anillo de sangría visible</span>
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', padding: '0 2px', marginBottom: 8 }}>
-          Línea punteada = zona segura (3.5 mm): mantené texto y logos adentro
-        </div>
+    <div className="cropper-overlay z-10000" onClick={handleOverlayClick}>
+      <div className="cropper-panel">
 
-        <div className="cropper-canvas-wrap">
-          <canvas
-            ref={canvasRef}
-            width={DISPLAY_SIZE}
-            height={DISPLAY_SIZE}
-            style={{ cursor: dragging ? 'grabbing' : 'grab', borderRadius: '50%', display: 'block' }}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={onMouseUp}
-            onMouseLeave={onMouseUp}
-            onWheel={onWheel}
-          />
-          <div className="cropper-hint">
-            <Move size={12} /> Arrastrá para mover · Scroll para zoom
+        {/* ── LEFT COLUMN: Canvas & Zoom ──────────────── */}
+        <div className="cropper-left">
+          <div className="cropper-canvas-wrap">
+            <canvas
+              ref={canvasRef}
+              width={DISPLAY_SIZE}
+              height={DISPLAY_SIZE}
+              className="cropper-canvas"
+              style={{ cursor: dragging ? 'grabbing' : 'grab', borderRadius: '50%', display: 'block' }}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp}
+              onMouseLeave={onMouseUp}
+              onWheel={onWheel}
+            />
+            <div className="cropper-hint">
+              <Move size={12} /> Arrastrá para mover · Scroll para zoom
+            </div>
           </div>
-        </div>
 
-        <div className="cropper-controls">
-          <div className="zoom-row">
+          <div className="zoom-row w-full mt-1">
             <ZoomOut size={16} />
             <Slider min={5} max={2000} step={1}
               value={[Math.round(zoom * 100)]}
@@ -332,9 +340,18 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
             <ZoomIn size={16} />
             <span className="zoom-label">{Math.round(zoom * 100)}%</span>
           </div>
+        </div>
 
-          <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* ── RIGHT COLUMN: Info, Options & Actions ────── */}
+        <div className="cropper-right">
+          <div>
+            <div className="cropper-header">
+              <CircleDashed size={18} />
+              <span>Recortar — ⌀{pinDiamMm}mm · sangría visible</span>
+            </div>
+          </div>
 
+          <div className="cropper-controls-scroll">
             {/* ── GROUP: Sangría ─────────────────────────────── */}
             <div style={{
               border: '1px solid rgba(184,134,11,0.25)',
@@ -442,21 +459,21 @@ export default function PinCropper({ imageSrc, onConfirm, onCancel, pinDiamMm, b
 
               </div>
             </div>
+          </div>
 
+          <div className="cropper-actions">
+            <Button variant="ghost" size="sm" onClick={handleReset} className="btn-ghost-gold px-4! py-2!">
+              <RotateCcw size={14} /> Resetear
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onCancel} className="btn-ghost-muted px-4! py-2!">
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={handleConfirm} className="btn-gold px-4! py-2!">
+              <Check size={16} /> Confirmar
+            </Button>
           </div>
         </div>
 
-        <div className="cropper-actions">
-          <Button variant="ghost" size="sm" onClick={handleReset} className="btn-ghost-gold px-4! py-2!">
-            <RotateCcw size={14} /> Resetear
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onCancel} className="btn-ghost-muted px-4! py-2!">
-            Cancelar
-          </Button>
-          <Button size="sm" onClick={handleConfirm} className="btn-gold px-4! py-2!">
-            <Check size={16} /> Confirmar
-          </Button>
-        </div>
       </div>
     </div>
   )
